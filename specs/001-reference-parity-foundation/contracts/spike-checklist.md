@@ -16,7 +16,9 @@ environment prevented a valid test; it is not a pass. `fail` means the behavior 
 | SPIKE-004 | Pin transparency with default hardware GLX | Depth-32 ARGB | **fail** | Depth 24 with the default GLX path; no alpha. Software GL produced depth 32. Needs EGL/alpha-config or an ARGB pin adapter |
 | SPIKE-005 | Pin click-through | Empty input shape; bounding/clip retained | **pass** | Input region count 0; bounding and clip regions full |
 | SPIKE-006 | X11 root capture under XWayland | Full desktop image | **fail** | `GetImage` → `BadMatch`; XWayland root is not a usable native capture source. Use compositor/portal on Wayland |
-| SPIKE-007 | Clipboard image set | Image published to the clipboard | **partial** | `arboard::set_image` path exists; cross-application paste was not automated on this session. The reference uses a dedicated D-Bus/Wayland helper |
+| SPIKE-020 | X11 root capture on Xvfb/Xorg | Full desktop image | **pass** | Reference reports 1920x1080 background and ARGB overlay; spike `GetImage` completes in 22 ms |
+| SPIKE-007 | Clipboard image X11 → native Wayland | Native app reads the image | **pass** | `arboard` set a 64x64 image; a focused GTK4 native Wayland reader read and saved it |
+| SPIKE-019 | Clipboard native Wayland → X11 | X11 reader receives the new image | **partial** | GTK4 set a 100x80 texture, but the X11 reader still received the older 64x64 image; needs a native helper or ownership/focus investigation |
 | SPIKE-008 | XGrabKey probe | Grab/ungrab without protocol error | **pass (probe only)** | Grab/ungrab succeeded on the XWayland root; actual global delivery is not proven |
 | SPIKE-009 | Pin above a native Wayland window | Visually above | **pass** | GNOME Shell Screencast recording shows the reference pin over the native Zed/terminal; the reference pin is 524x324 at (88,88), depth 32, override-redirect |
 | SPIKE-010 | GNOME 49 silent screenshot | Image without a user dialog | **blocked** | GNOME Shell D-Bus `AccessDenied`; portal returns a request handle but no response while a user decision is pending |

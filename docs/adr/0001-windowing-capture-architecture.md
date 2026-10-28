@@ -31,7 +31,7 @@ override-redirect ARGB pins on the target device. Evidence: OBS-016 through OBS-
    - It must hide the system cursor and draw its own crosshair/selection UI.
 
 2. **Pinned images: override-redirect ARGB X11 windows.**
-   - Frameless, always-on-top, skip-taskbar, skip-pager, `UTILITY` window type.
+   - Frameless, always-on-top, skip-taskbar, skip-pager; use a non-taskbar window type (spike: `UTILITY`; reference observed: override/normal).
    - Position is controlled by the application; the WM does not manage the window.
    - Click-through uses an empty X11 input shape (`XFixesSetWindowShapeRegion`/ShapeInput), not a
      boolean Qt flag.
@@ -58,10 +58,12 @@ override-redirect ARGB pins on the target device. Evidence: OBS-016 through OBS-
    - Wayland: freedesktop GlobalShortcuts portal or a desktop-environment shortcut that invokes
      the CLI. A missing portal is not a reason to block the core feature.
 
-5. **Clipboard starts with the X11/XWayland bridge.**
-   - Use a Rust clipboard crate for image/text first; add a native Wayland clipboard helper only
-     if cross-app image paste fails. The reference’s dedicated D-Bus/Wayland helper is evidence
-     that this edge can need extra work.
+5. **Clipboard starts with the X11/XWayland bridge, with a native helper as a likely follow-up.**
+   - A focused native Wayland GTK4 reader successfully read an image set by the X11 `arboard`
+     spike (X11 → Wayland passes).
+   - Native Wayland → X11 image read returned stale data in the smoke test; the reference ships a
+     dedicated Wayland clipboard helper. Plan for that helper if paste-from-native-Wayland is
+     required (it is for full parity).
 
 ## Alternatives Considered
 

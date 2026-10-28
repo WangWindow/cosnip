@@ -64,7 +64,7 @@
 - [ ] T033 [US2] Build/run the spike on x86_64 to confirm architecture neutrality
 - [ ] T034 [US2] Multi-monitor and mixed-DPI coordinate test
 - [ ] T035 [US2] KDE/KWin ScreenShot2 integration test
-- [ ] T036 [US2] Clipboard image paste into and out of a native Wayland application
+- [ ] T036 [US2] Clipboard image paste into and out of a native Wayland application (X11→Wayland passes; reverse needs a helper)
 
 **Checkpoint**: Core cases pass, with explicit blocked/follow-up items.
 

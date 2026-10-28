@@ -179,7 +179,7 @@ never enter the Cargo workspace.
      not a supported capture path.
    - Hotkeys: XGrabKey on X11; portal GlobalShortcuts or desktop shortcut on Wayland.
    - Clipboard: arboard/X11 bridge first; native Wayland helper only if cross-app tests fail.
-3. Carry the transparency, portal-permission, and native-Wayland-stacking risks into the MVP
+3. Carry the transparency, portal-permission, and other-compositor stacking risks into the MVP
    plan with explicit acceptance tests.
 4. Do not create product crates until the MVP spec/plan is approved.
 

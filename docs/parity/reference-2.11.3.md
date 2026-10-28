@@ -8,7 +8,7 @@ path is unverified; `gap` = unresolved; `deferred` = knowingly out of MVP scope.
 
 | ID | Category | Reference behavior | Priority | Evidence | Status | Verification |
 |---|---|---|---|---|---|---|
-| BEH-001 | capture | X11 session uses a native X11 grabber | P1 | OBS-002, OBS-006 | observed | integration on Xorg |
+| BEH-001 | capture | X11 session uses a native X11 grabber | P1 | OBS-002, OBS-006, OBS-025 | observed | integration on Xorg |
 | BEH-002 | capture | Wayland backend selection: KDE → KWin, GNOME ≤40 → Shell D-Bus, other → portal | P1 | OBS-002, OBS-003, OBS-004, OBS-005 | observed | unit + integration with mocked D-Bus |
 | BEH-003 | capture | GNOME ≥41 uses the freedesktop portal Screenshot request | P1 | OBS-002, OBS-005 | partial | manual portal test; permission UX |
 | BEH-004 | capture | KWin ScreenShot2 returns a PipeWire FD with cursor/native-resolution options | P2 | OBS-004 | observed | KDE integration test |
@@ -52,6 +52,7 @@ path is unverified; `gap` = unresolved; `deferred` = knowingly out of MVP scope.
 | BEH-042 | capture | Wayland native screenshot/pin stacking on GNOME | P1 | OBS-022 | gap | interactive portal + visual test |
 | BEH-043 | privacy | No telemetry, no cloud calls, local-only operation | P1 | constitution | observed | config/network audit |
 | BEH-044 | output | Original iconography and UI assets | P1 | constitution | deferred | asset review |
+| BEH-045 | pin | New pin includes a 12 px shadow margin; 500x300 selection produced a 524x324 window at (-12,-12) | P2 | OBS-023 | observed | golden/property test |
 
 ## Notes
 

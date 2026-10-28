@@ -87,8 +87,11 @@ The portal path uses `org.freedesktop.portal.Desktop` at
 - options: `interactive = false`, `handle_token = <unique token>`
 - response: `org.freedesktop.portal.Request.Response`
 
-The portal is asynchronous; the application subscribes to the request response. Evidence:
-OBS-005.
+The portal is asynchronous; the application subscribes to the request response. D-Bus monitoring
+shows the frontend forwarding the request to `org.freedesktop.impl.portal.Screenshot` with
+`permission_store_checked = true`; the GNOME backend then calls
+`org.gnome.Shell.Screenshot.Screenshot(false, true, "Screenshot")`. In this environment that
+Shell call is denied, so the portal request never receives a response. Evidence: OBS-005.
 
 ### 2.4 X11 screen grabber
 
@@ -97,7 +100,12 @@ framebuffer. On a native Xorg session this is the expected fast path. Under GNOM
 direct `GetImage` on the root window fails with `BadMatch` in the spike, and the reference's X11
 capture content was black because native Wayland surfaces are outside the XWayland root. X11
 capture must therefore be treated as an **Xorg-only** backend; it is not a valid Wayland capture
-strategy. Evidence: OBS-006, OBS-019.
+strategy.
+
+A nested Xvfb Xorg server (1920x1080x24) validated the X11 path: the reference reported
+`Background size: QSize(1920, 1080)`, showed a 1920x1080 ARGB Snipper, and became ready in
+223 ms under qemu; the native spike's X11 root capture completed in 22 ms. Evidence: OBS-006,
+OBS-019, OBS-025.
 
 ## 3. Overlay and Pin Window Strategy
 
@@ -114,9 +122,11 @@ flag set:
 
 The image-window constructor additionally uses X11 window-management helpers and sets
 `_NET_WM_STATE_SKIP_TASKBAR`, `_NET_WM_STATE_SKIP_PAGER`, `_NET_WM_STATE_ABOVE` /
-`_NET_WM_STATE_STAYS_ON_TOP`, and `_NET_WM_WINDOW_TYPE_UTILITY`. The snipping window is a
-32-bit ARGB override-redirect window covering the virtual desktop; the magnifier and toolbars are
-separate override-redirect popup windows. Evidence: OBS-007, OBS-008, OBS-009.
+`_NET_WM_STATE_STAYS_ON_TOP`, and a window type. On the target GNOME 49 session the observed
+reference pin reported `_KDE_NET_WM_WINDOW_TYPE_OVERRIDE` and `_NET_WM_WINDOW_TYPE_NORMAL`.
+The snipping window is a 32-bit ARGB override-redirect window covering the virtual desktop; the
+magnifier and toolbars are separate override-redirect popup windows. Evidence: OBS-007, OBS-008,
+OBS-009, OBS-023.
 
 ### 3.2 Click-through
 
@@ -235,7 +245,14 @@ argument and redirects its stderr to `wlclip.txt`. This is consistent with the r
 KDE Plasma 6.5 clipboard compatibility and with the presence of both `LinuxClipboard` and
 `WaylandClipboard` classes.
 
-Evidence: OBS-012.
+A cross-application smoke test in the other direction was partial: an X11 clipboard image set by
+the spike (`arboard`) was read by a native Wayland GTK4 clipboard reader with a focused window
+(64x64 image, saved successfully). A native Wayland GTK4 writer could set a 100x80 texture, but a
+subsequent X11 reader still received the older 64x64 image; native-Wayland-to-X11 image transfer
+was not proven. The reference's dedicated Wayland helper is the likely reason it can support both
+directions.
+
+Evidence: OBS-012, OBS-024.
 
 ## 6. Configuration, History, Tray, and Logs
 
@@ -309,7 +326,15 @@ Evidence: OBS-014, OBS-007.
 - Continuous repaint in the spike drove CPU to ~367%; this is a spike artifact and confirms that
   the product must be event-driven and idle without repaints.
 
-Evidence: OBS-016..OBS-021.
+### Nested Xvfb/Xorg (validates the X11 path, not a product baseline)
+
+- Reference snip preparation to `Snipper: ready`: 223 ms under qemu.
+- Reference overlay: 1920x1080 ARGB, 32-bit depth, focus in.
+- Spike X11 root capture: 22 ms for 1920x1080.
+- Xvfb has no window manager, so fullscreen focus/stacking numbers are not representative of a
+  real Xorg desktop.
+
+Evidence: OBS-016..OBS-021, OBS-025.
 
 ## 10. Reproduction Harness
 
@@ -346,7 +371,7 @@ Evidence: OBS-006, OBS-008, OBS-009, OBS-010, OBS-019, OBS-023.
 | KDE/KWin ScreenShot2 | Backend unverified | Medium (static) | Test on a KDE session |
 | Tray on GNOME | Tray may be invisible | High (no StatusNotifierWatcher) | Document AppIndicator requirement; CLI fallback |
 | Global hotkey delivery on Wayland | Shortcut path uncertain | Medium (XGrabKey probe succeeded, delivery not proven) | Real keypress test; portal GlobalShortcuts test |
-| Clipboard cross-app paste | End-to-end image exchange unverified | Medium (D-Bus protocol + arboard smoke test) | Paste into a native Wayland app; reverse direction |
+| Clipboard reverse direction | Native Wayland → X11 image read returned stale data | Medium (smoke test) | Implement/test a native Wayland clipboard helper; reference uses one |
 | `paste --files` command | Parsed but produced no visible image window in the emulated harness | Low | Retest with a relative path and an x86_64 reference run; check whether this path requires Pro |
 | Annotation input/focus | Automated interaction was unreliable under emulation | Low | Manual interaction or an x86_64 reference machine |
 | Reference performance | Emulation skew | Low | Measure on an x86_64 machine |
@@ -378,6 +403,8 @@ Evidence: OBS-006, OBS-008, OBS-009, OBS-010, OBS-019, OBS-023.
 | OBS-021 | Spike latency and CPU observations |
 | OBS-022 | Gap register (this section) |
 | OBS-023 | GNOME Shell Screencast visual oracle; reference pin/overlay above native Wayland windows; reference pin 524x324 depth 32 |
+| OBS-024 | X11 → native Wayland image clipboard read succeeded; native → X11 reverse not proven |
+| OBS-025 | Nested Xvfb/Xorg: reference X11 capture and overlay pass; spike root capture 22 ms |
 
 ## 13. Parity Matrix
 
