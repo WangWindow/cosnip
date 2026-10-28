@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cosnip.local/schemas/evidence.schema.json",
+  "title": "Cosnip sanitized evidence record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "observation_id",
+    "reference_build",
+    "method",
+    "tool",
+    "timestamp",
+    "steps",
+    "observed",
+    "confidence",
+    "sanitized"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "observation_id": {
+      "type": "string",
+      "pattern": "^OBS-[0-9]{3}$"
+    },
+    "reference_build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "platform", "sha1"],
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" },
+        "platform": { "type": "string" },
+        "sha1": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      }
+    },
+    "method": {
+      "enum": ["static", "dynamic", "manual", "measurement"]
+    },
+    "tool": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "steps": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1
+    },
+    "inputs": {
+      "type": "object",
+      "description": "Sanitized, non-sensitive inputs only."
+    },
+    "expected": {
+      "type": "string"
+    },
+    "observed": {
+      "type": "string",
+      "minLength": 1
+    },
+    "confidence": {
+      "enum": ["high", "medium", "low"]
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "sanitized": {
+      "const": true
+    },
+    "local_artifacts": {
+      "type": "array",
+      "description": "Temporary paths only; must remain under temp/ and must not be committed.",
+      "items": {
+        "type": "string",
+        "pattern": "^temp/"
+      }
+    }
+  }
+}
