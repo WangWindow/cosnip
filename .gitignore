@@ -1,2 +1,6 @@
 bin
 temp
+
+# Local tooling caches
+**/__pycache__/
+*.pyc

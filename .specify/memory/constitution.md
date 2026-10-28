@@ -1,16 +1,12 @@
 <!--
 Sync Impact Report
 ==================
-Version change: none → 1.0.0 (initial ratification)
+Version change: 1.0.0 → 1.1.0 (platform scope amendment)
 Modified principles:
-  - Template principle slot 1 → I. Personal, Lawful Use Only (NON-NEGOTIABLE)
-  - Template principle slot 2 → II. Behavioral Reference, Original Implementation
-  - Template principle slot 3 → III. Rust Workspace with Isolated Platform Edges
-  - Template principle slot 4 → IV. Test-First and Evidence-Based Fidelity
-  - Template principle slot 5 → V. Local-Only Privacy and Operational Restraint
-Added sections:
-  - Additional Constraints
-  - Development Workflow
+  - III. Rust Workspace with Isolated Platform Edges (dual-architecture targets)
+Modified sections:
+  - Additional Constraints (supported architectures and reference baseline)
+Added sections: none
 Removed sections: none
 Follow-up TODOs: none
 -->
@@ -64,8 +60,12 @@ and reusable crates under `crates/`.
 - Domain logic (geometry, annotation model, capture workflow, history) MUST live in a pure
   Rust core that has no UI, windowing, or operating-system dependencies.
 - Platform-specific behavior (screen capture, global hotkeys, clipboard, window pinning,
-  tray integration) MUST be isolated behind explicit traits or adapter crates. Linux x86_64
-  is the primary target; any additional platform requires an explicit feature scope.
+  tray integration) MUST be isolated behind explicit traits or adapter crates. Linux
+  aarch64 and x86_64 are both supported targets; aarch64 is the primary validation and
+  release target, while x86_64 remains a supported development and reference-analysis
+  host. Application code MUST stay architecture-neutral; architecture-specific
+  optimizations MUST have portable fallbacks and MUST be tested on both targets. 32-bit
+  ARM and 32-bit x86 are out of scope unless a future amendment adds them explicitly.
 - `unsafe` MUST be forbidden by default. Necessary exceptions MUST be isolated, documented
   with a `SAFETY` rationale, covered by tests where feasible, and justified in the plan.
 - Every dependency MUST be justified by capability, maintenance status, license
@@ -115,15 +115,17 @@ Cosnip handles screen content, clipboard data, and file paths, which are sensiti
 
 ## Additional Constraints
 
-**Reference baseline**: The provided Snipaste 2.11.3 x64 Windows build and the provided Linux
-AppImage are local reference artifacts. The exact version observed for any behavior MUST be
+**Reference baseline**: The Snipaste 2.11.3 Linux x86_64 AppImage is the primary local
+reference artifact. The Windows x64/ARM64 builds are optional secondary references and are
+not required for Linux feature work. The exact version, hash, and observed behavior MUST be
 recorded in the corresponding feature specification. Reference artifacts MUST stay under the
 gitignored `temp/` directory and MUST NOT be committed, copied into build outputs, or bundled
 with Cosnip.
 
 **Technology**: Stable Rust with an explicitly declared minimum supported Rust version. The
 workspace MUST expose a single application binary and separate library crates for domain,
-capture, UI, and platform concerns. Dependency licenses MUST be recorded; a copyleft
+capture, UI, and platform concerns. The release and performance-validation matrix MUST include
+both aarch64 and x86_64 Linux builds. Dependency licenses MUST be recorded; a copyleft
 dependency requires explicit justification in the plan.
 
 **Assets**: Icons, fonts, sounds, translations, and sample images MUST be original, generated,
@@ -174,4 +176,4 @@ against this constitution. A plan with an unresolved violation MUST NOT proceed 
 implementation. Exceptions MUST be time-boxed, documented, and approved by the project owner.
 Complexity beyond the simplest viable design MUST be justified in the plan.
 
-**Version**: 1.0.0 | **Ratified**: 2026-10-27 | **Last Amended**: 2026-10-27
+**Version**: 1.1.0 | **Ratified**: 2026-10-27 | **Last Amended**: 2026-10-29
