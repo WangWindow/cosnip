@@ -58,7 +58,7 @@
 - [x] T027 [US2] Probe X11 root capture, clipboard image set, and XGrabKey
 - [x] T028 [US2] Record latency, CPU, and RSS; identify continuous-repaint inflation
 - [x] T029 [US2] Compare hardware GLX vs software GL for transparent pin depth
-- [ ] T030 [US2] Manual visual check: pin above a native Wayland window on GNOME
+- [x] T030 [US2] Visual check with native GNOME screencast: reference pin/overlay above native Wayland windows
 - [ ] T031 [US2] Follow-up spike: EGL/alpha GL configuration for depth-32 pins without software GL
 - [ ] T032 [US2] Follow-up: interactive GNOME 49 portal capture and permission UX
 - [ ] T033 [US2] Build/run the spike on x86_64 to confirm architecture neutrality
@@ -87,7 +87,7 @@
 
 - [x] T041 Update `quickstart.md` with reproducible commands and expected results
 - [x] T042 Audit `git status` for reference binaries, raw analysis, and generated artifacts
-- [ ] T043 Commit the constitution, spec, research, ADR, parity matrix, and dependency record
+- [x] T043 Commit the constitution, spec, research, ADR, parity matrix, and dependency record
 - [ ] T044 After M0 approval, create the MVP feature with `$speckit-specify`
 
 ## Dependencies

@@ -139,6 +139,36 @@ xwininfo -id <window-id> | grep -E 'Depth|Map State|Override'
 Capture a specific X11 window (not the root) with Python-Xlib if visual evidence is needed; root
 capture under XWayland is black or rejected.
 
+## 4.1 Native Visual Oracle (GNOME Shell Screencast)
+
+Direct screenshot calls were denied on GNOME 49, but the Shell Screencast interface records the
+composited desktop, including native Wayland surfaces. Keep the D-Bus connection alive and call
+`StopScreencast` from the same connection; otherwise the MP4 is truncated.
+
+```javascript
+// gjs temp/analysis/screencast.js
+const {Gio, GLib} = imports.gi;
+const bus = Gio.bus_get_sync(Gio.BusType.SESSION, null);
+const opts = {
+  'draw-cursor': new GLib.Variant('b', true),
+  'framerate': new GLib.Variant('i', 30),
+};
+const args = new GLib.Variant('(sa{sv})', ['/tmp/cosnip-cast-%d.mp4', opts]);
+bus.call_sync('org.gnome.Shell.Screencast', '/org/gnome/Shell/Screencast',
+  'org.gnome.Shell.Screencast', 'Screencast', args, null, Gio.DBusCallFlags.NONE, -1, null);
+GLib.usleep(6000000);
+bus.call_sync('org.gnome.Shell.Screencast', '/org/gnome/Shell/Screencast',
+  'org.gnome.Shell.Screencast', 'StopScreencast', null, null, Gio.DBusCallFlags.NONE, -1, null);
+```
+
+```bash
+timeout 15 gjs temp/analysis/screencast.js
+ffmpeg -loglevel error -ss 2 -i /tmp/cosnip-cast-*.mp4 -frames:v 1 -y frame.png
+```
+
+Use the recording to verify overlay coverage and pin stacking over native Wayland applications.
+Reference screenshots and recordings stay in `temp/`.
+
 ## 5. Cleanup
 
 ```bash

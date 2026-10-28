@@ -24,7 +24,7 @@ path is unverified; `gap` = unresolved; `deferred` = knowingly out of MVP scope.
 | BEH-014 | pin | Pins use an ARGB visual for transparency | P2 | OBS-018 | partial | needs EGL/alpha-config or ARGB adapter |
 | BEH-015 | pin | Click-through uses an empty XFixes input region | P1 | OBS-007, OBS-017 | observed | shape integration test |
 | BEH-016 | pin | Drag/wheel zoom/Ctrl+wheel opacity/rotate/flip/reset/close/destroy | P2 | OBS-014 | observed | manual interaction tests |
-| BEH-017 | pin | Pin above native Wayland windows | P1 | OBS-022 | gap | manual visual test; fallback Xorg |
+| BEH-017 | pin | Pin above native Wayland windows | P1 | OBS-023 | observed | native screencast; recheck KDE |
 | BEH-018 | annotation | Item families: rectangle/ellipse, arrow/line, pencil, marker, text, mosaic, blur, magnifier, number, eraser | P1 | OBS-015 | observed | unit/golden per item |
 | BEH-019 | annotation | Undo/redo across moves, rotations, and edits | P1 | OBS-014, OBS-015 | observed | unit/history tests |
 | BEH-020 | annotation | Right click finishes the current shape; undo until disappearance then redo to re-edit | P2 | OBS-014 | observed | manual/unit |

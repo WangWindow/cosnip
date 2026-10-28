@@ -142,11 +142,35 @@ one pin variant.
 
 Evidence: OBS-016, OBS-017, OBS-018, OBS-019, OBS-020, OBS-021.
 
+### 3.4 Reference stacking on native Wayland (visual oracle)
+
+GNOME Shell's `org.gnome.Shell.Screencast` D-Bus service records the composited desktop,
+including native Wayland surfaces. A 5–8 second recording was kept alive on one D-Bus connection
+and stopped explicitly; the resulting MP4 was frame-extracted with `ffmpeg`. This provides a
+visual oracle that the direct screenshot APIs denied.
+
+Observed with the reference running under X11-forced mode:
+
+- A reference pin created by `snip -o pin --area 100 100 500 300` appeared at (88,88) with a
+  524x324 window. The extra 12 px around the 500x300 capture is the pin's shadow/border margin.
+  The window was depth 32 and override-redirect, with `SKIP_TASKBAR`, `SKIP_PAGER`,
+  `_KDE_NET_WM_WINDOW_TYPE_OVERRIDE`, and `_NET_WM_WINDOW_TYPE_NORMAL`.
+- The pin was visibly **above** native Wayland windows (the Zed editor and terminal in the
+  recording). This resolves the main stacking risk for X11 override-redirect pins on GNOME
+  Wayland.
+- A reference snipping overlay triggered with `snip --hold --area 100 100 500 300` covered the
+  entire composited desktop and appeared above native Wayland windows. Its screenshot background
+  was black because the reference was forced to use X11 capture, but its selection, toolbar, and
+  tips were visible and it logged `Snipper: focus in`.
+
+Evidence: OBS-023.
+
 **Decision implication**: use a WM-managed fullscreen window for the interactive snip overlay
 (keyboard focus works), and use override-redirect ARGB windows for pins. Transparent pins require
 an alpha-capable GL configuration; on this Mali/XWayland device the hardware GLX path produced
 depth 24, while software GL produced depth 32. This must be resolved with EGL or a dedicated ARGB
-pin adapter before parity for pin shadows/opacity is claimed.
+pin adapter before parity for pin shadows/opacity is claimed. Reference pins are topmost above
+native Wayland windows on GNOME 49.
 
 ## 4. Overlay Interaction Model
 
@@ -303,20 +327,27 @@ Evidence: OBS-016..OBS-021.
 - `gnome-shell --version` inside the qemu rootfs is not available, which changes the reference's
   backend selection; this was controlled by a temporary fake shell version only for experimentation
   and is not a supported product configuration.
+- Native composited screenshots are obtained with `org.gnome.Shell.Screencast` from a GJS process
+  that keeps the D-Bus connection alive, sleeps for the capture window, and calls
+  `StopScreencast` on the same connection. Stopping from a different `gdbus` process produced a
+  truncated MP4 without a `moov` atom. The finalized MP4 is frame-extracted with `ffmpeg`.
+- Window-targeted X11 captures remain useful for UI details; the native screencast is used for
+  stacking, coverage, and native-Wayland relationships.
 
-Evidence: OBS-006, OBS-008, OBS-009, OBS-010, OBS-019.
+Evidence: OBS-006, OBS-008, OBS-009, OBS-010, OBS-019, OBS-023.
 
 ## 11. Gaps and Confidence
 
 | Gap | Impact | Confidence | Follow-up |
 |---|---|---|---|
 | GNOME 49 direct screenshot is denied; portal request waits for user action | Native Wayland capture path unverified | Medium (static + call behavior) | Interactive session test, permission-store inspection, or Xorg fallback |
-| Native Wayland stacking of X11 pins not visually verified | Pin parity risk | Medium (X11 override-redirect behavior) | Manual visual test with a native Wayland window |
+| Native Wayland stacking | Resolved for GNOME 49 | High (native screencast) | Recheck on KDE and other compositors |
 | Multi-monitor and mixed-DPI | Coordinate mapping unknown | Low | Add a monitor/scale test matrix in MVP |
 | KDE/KWin ScreenShot2 | Backend unverified | Medium (static) | Test on a KDE session |
 | Tray on GNOME | Tray may be invisible | High (no StatusNotifierWatcher) | Document AppIndicator requirement; CLI fallback |
 | Global hotkey delivery on Wayland | Shortcut path uncertain | Medium (XGrabKey probe succeeded, delivery not proven) | Real keypress test; portal GlobalShortcuts test |
 | Clipboard cross-app paste | End-to-end image exchange unverified | Medium (D-Bus protocol + arboard smoke test) | Paste into a native Wayland app; reverse direction |
+| `paste --files` command | Parsed but produced no visible image window in the emulated harness | Low | Retest with a relative path and an x86_64 reference run; check whether this path requires Pro |
 | Annotation input/focus | Automated interaction was unreliable under emulation | Low | Manual interaction or an x86_64 reference machine |
 | Reference performance | Emulation skew | Low | Measure on an x86_64 machine |
 
@@ -346,8 +377,9 @@ Evidence: OBS-006, OBS-008, OBS-009, OBS-010, OBS-019.
 | OBS-020 | Spike XGrabKey probe |
 | OBS-021 | Spike latency and CPU observations |
 | OBS-022 | Gap register (this section) |
+| OBS-023 | GNOME Shell Screencast visual oracle; reference pin/overlay above native Wayland windows; reference pin 524x324 depth 32 |
 
 ## 13. Parity Matrix
 
-The living matrix is in [`docs/parity/reference-2.11.3.md`](../../../docs/parity/reference-2.11.3.md).
+The living matrix is in [`docs/parity/reference-2.11.3.md`](../../docs/parity/reference-2.11.3.md).
 It is the input to the MVP specification and must be updated with every new observation.

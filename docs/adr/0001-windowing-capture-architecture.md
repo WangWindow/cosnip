@@ -39,6 +39,10 @@ override-redirect ARGB pins on the target device. Evidence: OBS-016 through OBS-
      produced depth 24; an alpha-capable configuration (software GL in the spike) produced depth
      32. The product must either find an EGL/alpha-capable config or use a dedicated ARGB pin
      renderer before promising shadows/opacity parity.
+   - GNOME 49 was visually verified with a native composited screencast: the reference's
+     524x324 pin (500x300 capture plus a 12 px shadow margin) and its fullscreen overlay both
+     appear above native Wayland windows. The pin is depth 32, override-redirect, and hidden from
+     the taskbar/pager.
 
 3. **Capture backend is a platform adapter, not a windowing detail.**
    - Xorg session: native X11/XShm-style capture.
@@ -81,8 +85,8 @@ override-redirect ARGB pins on the target device. Evidence: OBS-016 through OBS-
 
 **Negative / Risks**
 
-- Native Wayland stacking of X11 pins is not visually verified; if Mutter places native windows
-  above pins, pin parity on GNOME Wayland is reduced.
+- Native Wayland stacking is verified on GNOME 49, but not yet on KDE or other compositors; their
+  stacking policy may differ.
 - Transparent pins depend on an alpha-capable GL configuration. Software GL works but may be a
   performance and packaging burden.
 - GNOME 49 portal capture requires a user decision in this environment; silent capture is not
@@ -107,6 +111,7 @@ override-redirect ARGB pins on the target device. Evidence: OBS-016 through OBS-
 - OBS-009..OBS-011 (overlay/CLI behavior)
 - OBS-016..OBS-021 (spike results)
 - OBS-022 (gap register)
+- OBS-023 (native screencast: reference pin/overlay above native Wayland windows)
 
 ## Review Gate
 
