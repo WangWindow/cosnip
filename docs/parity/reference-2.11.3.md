@@ -60,3 +60,38 @@ path is unverified; `gap` = unresolved; `deferred` = knowingly out of MVP scope.
 - `partial` rows require a specific follow-up mentioned in the research gap register.
 - A row is not “implemented” until it has a Cosnip test and parity evidence; this matrix tracks
   the reference baseline, not product progress.
+
+## Cosnip MVP Status (Feature 002)
+
+This table tracks implementation progress, not reference evidence. `parity` means the MVP
+behavior was demonstrated; `partial` means a deliberately reduced subset; `deferred` means a
+later feature; `difference` means an accepted MVP difference.
+
+| Behavior | MVP status | Notes |
+|---|---|---|
+| BEH-001 X11 capture | parity | Xvfb capture test plus 12–35 ms release capture |
+| BEH-002 backend selection | parity (MVP subset) | X11 and GNOME Screencast only; KDE/portal error |
+| BEH-003 GNOME portal capture | difference | portal blocked; GNOME Screencast fallback used |
+| BEH-006/011 overlay/coverage/focus | parity | 1920x1080 fullscreen, `ABOVE`, `FOCUSED` |
+| BEH-007 selection/badge/handles | partial | drag, arrows, square constraint, Ctrl+A; handles are visual, not resize handles |
+| BEH-008 magnifier/color | partial | 11x11 magnifier, coordinates, RGB/HEX; no C/Shift color-copy shortcuts |
+| BEH-009 keyboard tips | partial | overlay tips panel; no window/element detection |
+| BEH-010 toolbar | partial | Copy/Save/Pin/Cancel; annotation tools deferred |
+| BEH-012 override overlay | difference | WM-managed fullscreen used for focus |
+| BEH-013 pin flags | parity | override-redirect, depth 32, Utility, skip taskbar/pager |
+| BEH-014 ARGB/shadow | partial | depth 32; opaque image-sized pin, no shadow/opacity |
+| BEH-015 click-through | deferred | no toggle UI/hotkey yet |
+| BEH-016 pin interactions | partial | drag, wheel zoom, close; no rotate/flip/opacity |
+| BEH-017 native stacking | parity | native screencast shows pin above browser |
+| BEH-018..021 annotations | deferred | next feature |
+| BEH-022 image clipboard | parity | 500x300 read by native Wayland GTK4 after exit |
+| BEH-023 text/HTML/URI/color clipboard | deferred | later feature |
+| BEH-024..026 hotkeys | deferred | use a desktop shortcut invoking `cosnip snip` |
+| BEH-027..029 CLI | partial | `snip`, `--area`, `--full`, `--delay`, `--copy`, `--save`, `--pin`; other commands later |
+| BEH-030/031 config/history | deferred | no config or history in MVP |
+| BEH-032 tray | deferred | no tray in MVP |
+| BEH-033 output | partial | PNG only; JPEG/WebP later |
+| BEH-034/035 hold semantics | difference | MVP always shows overlay; no `--hold` |
+| BEH-041 multi-monitor/DPI | unsupported | explicit error |
+| BEH-042 portal/pure Wayland | unsupported | GNOME Screencast fallback only |
+| BEH-045 pin shadow margin | difference | image-sized pin avoids black margin on depth-24 GL |

@@ -15,17 +15,19 @@ license, and attack surface (Constitution III).
 | `x11rb` | 0.13 | MIT OR Apache-2.0 | X11 capture, XShape, XFixes, XGrabKey, screen info |
 | `arboard` | 3 | MIT OR Apache-2.0 | Clipboard bridge; native Wayland helper may be needed later |
 | `image` | 0.25 | MIT OR Apache-2.0 | PNG/JPEG/WebP output; enable only needed codecs |
-| `tiny-skia` | planned | BSD-3-Clause | CPU rasterization for document/annotations/pins |
-| `cosmic-text` | planned | MIT OR Apache-2.0 | Text shaping and system-font fallback |
-| `kurbo` | planned | MIT OR Apache-2.0 | Pure geometry for the domain model |
-| `zbus` / `ashpd` | planned | MIT | D-Bus/portal capture, GlobalShortcuts, single instance |
-| `ksni` | planned | MIT | StatusNotifierItem tray; GNOME may require an extension |
-| `clap` | planned | MIT OR Apache-2.0 | CLI surface |
-| `serde` / `toml` | planned | MIT OR Apache-2.0 | Config |
-| `tracing` / `tracing-subscriber` | planned | MIT | Redacted local logs |
-| `thiserror` / `anyhow` | planned | MIT OR Apache-2.0 | Error boundaries |
+| `tiny-skia` | planned for annotations | BSD-3-Clause | CPU rasterization; not used by the MVP |
+| `cosmic-text` | planned for annotations | MIT OR Apache-2.0 | Text shaping and system-font fallback |
+| `kurbo` | not used (MVP uses integer core geometry) | MIT OR Apache-2.0 | Available for later vector paths |
+| `zbus` | 6.1 | MIT | GNOME Screencast D-Bus capture; `zbus::block_on` keeps one connection alive |
+| `ashpd` | planned | MIT | Portal ScreenCast/GlobalShortcuts for a later backend |
+| `ksni` | planned for tray | MIT | StatusNotifierItem tray; GNOME may require an extension |
+| `clap` | 4.6 | MIT OR Apache-2.0 | CLI surface |
+| `jiff` | 0.2 | MIT | Timestamped default output names |
+| `tracing` / `tracing-subscriber` | 0.1 | MIT | Available for redacted logs; MVP uses stderr messages |
+| `thiserror` | 2 | MIT OR Apache-2.0 | Typed adapter errors |
 | `rayon` | planned | MIT OR Apache-2.0 | Parallel image processing; measure on ARM |
-| `criterion` / `proptest` / `insta` / `tempfile` | dev | MIT/Apache-2.0 | Benchmarks, property tests, snapshots, temp files |
+| `tempfile` | 3 | MIT OR Apache-2.0 | Runtime temp dirs and test fixtures |
+| `criterion` / `proptest` / `insta` | dev/planned | MIT/Apache-2.0 | Benchmarks, property tests, snapshots |
 
 ## Analysis-Only Instruments (Never Linked)
 
@@ -38,9 +40,14 @@ license, and attack surface (Constitution III).
 | Ubuntu base amd64 rootfs | 26.04 | Ubuntu component licenses | Reference runtime libraries only |
 | `squashfs-tools` | 4.7.5 | GPL-2.0 (tool) | AppImage extraction |
 | Snipaste 2.11.3 AppImage | 2.11.3 | Proprietary freeware | Behavioral reference; not redistributed |
+| `ffmpeg` | system | GPL/LGPL build-dependent | Optional runtime decoder for the GNOME Screencast fallback; not bundled |
 
 The analysis tools are development-time instruments. They must not become runtime, build, or test
 dependencies (Constitution II).
+
+`ffmpeg` is an external runtime dependency only for the GNOME 49 Screencast fallback. `--doctor`
+detects it; the binary does not bundle it. A future PipeWire/Mutter ScreenCast backend should
+remove this dependency.
 
 ## Rejected for This Device
 

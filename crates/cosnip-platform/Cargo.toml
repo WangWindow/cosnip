@@ -1,0 +1,17 @@
+[package]
+name = "cosnip-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Platform adapters for Cosnip"
+
+[dependencies]
+arboard.workspace = true
+cosnip-core = { path = "../cosnip-core" }
+directories.workspace = true
+thiserror.workspace = true
+x11rb.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

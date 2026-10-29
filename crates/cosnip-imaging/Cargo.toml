@@ -1,0 +1,12 @@
+[package]
+name = "cosnip-imaging"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Image crop and encode primitives for Cosnip"
+
+[dependencies]
+cosnip-core = { path = "../cosnip-core" }
+image.workspace = true
+thiserror.workspace = true

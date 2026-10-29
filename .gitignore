@@ -1,5 +1,6 @@
 bin
 temp
+target
 
 # Local tooling caches
 **/__pycache__/

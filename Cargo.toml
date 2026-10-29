@@ -1,0 +1,47 @@
+[workspace]
+members = [
+    "crates/cosnip-core",
+    "crates/cosnip-imaging",
+    "crates/cosnip-capture",
+    "crates/cosnip-platform",
+    "crates/cosnip-ui",
+    "crates/cosnip-app",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/cosnip/cosnip"
+description = "A personal Linux snip and pin tool"
+
+[workspace.dependencies]
+anyhow = "1"
+arboard = "3"
+clap = { version = "4", features = ["derive"] }
+directories = "6"
+eframe = { version = "0.37", default-features = false, features = [
+    "glow",
+    "x11",
+    "wayland",
+    "default_fonts",
+    "system_fonts",
+] }
+egui = "0.37"
+image = { version = "0.25", default-features = false, features = ["png"] }
+jiff = "0.2"
+tempfile = "3"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+winit = "0.30"
+x11rb = { version = "0.13", features = ["randr", "shm", "xfixes", "shape"] }
+zbus = "6"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,20 @@
+[package]
+name = "cosnip-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Cosnip command-line application"
+
+[[bin]]
+name = "cosnip"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+cosnip-capture = { path = "../cosnip-capture" }
+cosnip-core = { path = "../cosnip-core" }
+cosnip-imaging = { path = "../cosnip-imaging" }
+cosnip-platform = { path = "../cosnip-platform" }
+cosnip-ui = { path = "../cosnip-ui" }
+jiff.workspace = true

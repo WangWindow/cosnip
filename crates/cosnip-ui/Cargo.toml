@@ -1,0 +1,17 @@
+[package]
+name = "cosnip-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "eframe UI for Cosnip"
+
+[dependencies]
+cosnip-capture = { path = "../cosnip-capture" }
+cosnip-core = { path = "../cosnip-core" }
+cosnip-imaging = { path = "../cosnip-imaging" }
+cosnip-platform = { path = "../cosnip-platform" }
+eframe.workspace = true
+egui.workspace = true
+winit.workspace = true
+jiff.workspace = true
