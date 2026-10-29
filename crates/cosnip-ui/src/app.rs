@@ -114,6 +114,19 @@ pub fn run(frame: Frame, options: UiOptions) -> Outcome {
         ..Outcome::default()
     }));
     let app = CosnipApp::new(frame, options, Arc::clone(&outcome));
+    run_native(app, outcome)
+}
+
+pub fn run_pin(frame: Frame, position: Option<(i32, i32)>) -> Outcome {
+    let outcome = Arc::new(Mutex::new(Outcome {
+        code: 4,
+        ..Outcome::default()
+    }));
+    let app = CosnipApp::new_pin(frame, position, Arc::clone(&outcome));
+    run_native(app, outcome)
+}
+
+fn run_native(app: CosnipApp, outcome: Arc<Mutex<Outcome>>) -> Outcome {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Cosnip")
@@ -166,10 +179,12 @@ struct CosnipApp {
     next_number: u32,
     text_editor: Option<TextEditor>,
     pin: Option<Pin>,
+    pin_start: Option<(Frame, (i32, i32))>,
     clipboard: Option<ClipboardOwner>,
     outcome: Arc<Mutex<Outcome>>,
     done: bool,
     auto_confirm_at: Option<std::time::Instant>,
+    pin_close_at: Option<std::time::Instant>,
     exit_at: Option<std::time::Instant>,
 }
 
@@ -233,10 +248,52 @@ impl CosnipApp {
             next_number: 1,
             text_editor: None,
             pin: None,
+            pin_start: None,
             clipboard: None,
             outcome,
             done: false,
             auto_confirm_at: std::env::var("COSNIP_TEST_AUTOCONFIRM_MS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms)),
+            pin_close_at: None,
+            exit_at: None,
+        }
+    }
+
+    fn new_pin(frame: Frame, position: Option<(i32, i32)>, outcome: Arc<Mutex<Outcome>>) -> Self {
+        let placeholder = Frame::new(1, 1, vec![0, 0, 0, 255]).expect("1x1 frame");
+        Self {
+            frame: Arc::new(placeholder),
+            tiles: Vec::new(),
+            selection: Selection::new(None),
+            output: OutputRequest {
+                copy: false,
+                save: None,
+                pin: true,
+            },
+            save_path: None,
+            overlay_open: false,
+            monitors: Vec::new(),
+            focused_monitor: None,
+            cursor_hidden: Vec::new(),
+            drag_anchor: None,
+            drag_monitor: None,
+            drag_mode: None,
+            annotations: AnnotationDocument::default(),
+            draft: None,
+            tool: Tool::Select,
+            color: PALETTE[0],
+            line_width: 3,
+            next_number: 1,
+            text_editor: None,
+            pin: None,
+            pin_start: Some((frame, position.unwrap_or((0, 0)))),
+            clipboard: None,
+            outcome,
+            done: false,
+            auto_confirm_at: None,
+            pin_close_at: std::env::var("COSNIP_TEST_PIN_CLOSE_MS")
                 .ok()
                 .and_then(|v| v.parse::<u64>().ok())
                 .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms)),
@@ -245,6 +302,28 @@ impl CosnipApp {
     }
 
     fn with_context(mut self, cc: &eframe::CreationContext<'_>) -> Self {
+        if let Some((image, position)) = self.pin_start.take() {
+            let image_size = (image.width(), image.height());
+            let desktop = cosnip_capture::screen_info()
+                .map(|info| (info.width, info.height))
+                .unwrap_or(image_size);
+            let (x, y) = clamp_pin_position(position, image_size, desktop);
+            let rect = Rect::new(x, y, image.width(), image.height());
+            match create_pin(&cc.egui_ctx, image, rect) {
+                Ok(pin) => {
+                    self.pin = Some(pin);
+                    self.outcome.lock().unwrap().pinned = true;
+                }
+                Err(error) => {
+                    eprintln!("cosnip: pin failed: {error}");
+                    self.outcome.lock().unwrap().code = 5;
+                    self.done = true;
+                    self.exit_at = Some(std::time::Instant::now());
+                }
+            }
+            return self;
+        }
+
         let max_side = texture_tile_size(&cc.egui_ctx);
         for y in (0..self.frame.height()).step_by(max_side as usize) {
             for x in (0..self.frame.width()).step_by(max_side as usize) {
@@ -332,41 +411,8 @@ impl CosnipApp {
     }
 
     fn pin_image(&mut self, ctx: &egui::Context, image: Frame, rect: Rect) -> Result<(), String> {
-        let mut tiles = Vec::new();
-        let max_side = texture_tile_size(ctx);
-        let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
-        for y in (0..image.height()).step_by(max_side as usize) {
-            for x in (0..image.width()).step_by(max_side as usize) {
-                let width = max_side.min(image.width() - x);
-                let height = max_side.min(image.height() - y);
-                let tile_rect = Rect::new(x as i32, y as i32, width, height);
-                let Ok(tile) = crop(&image, tile_rect) else {
-                    continue;
-                };
-                let size = [tile.width() as usize, tile.height() as usize];
-                let color = ColorImage::from_rgba_unmultiplied(size, tile.rgba());
-                let texture =
-                    ctx.load_texture(format!("pin-{x}-{y}"), color, TextureOptions::LINEAR);
-                tiles.push(PinTile {
-                    texture,
-                    x: tile_rect.x,
-                    y: tile_rect.y,
-                    width,
-                    height,
-                });
-            }
-        }
-        let position = pin_position(rect, pixels_per_point);
-        self.pin = Some(Pin {
-            frame: image,
-            tiles,
-            position,
-            scale: 1.0,
-            viewport: ViewportId::from_hash_of(PIN_ID),
-            drag_start_global: None,
-            drag_start_position: position,
-            dragging: false,
-        });
+        let pin = create_pin(ctx, image, rect)?;
+        self.pin = Some(pin);
         self.outcome.lock().unwrap().pinned = true;
         self.close_overlay(ctx);
         ctx.request_repaint();
@@ -1514,6 +1560,18 @@ impl eframe::App for CosnipApp {
         if self.pin.is_some() {
             self.show_pin(ctx);
         }
+        if let Some(at) = self.pin_close_at {
+            let now = std::time::Instant::now();
+            if self.pin.is_some() && now >= at {
+                self.pin_close_at = None;
+                if let Some(pin) = self.pin.take() {
+                    ctx.send_viewport_cmd_to(pin.viewport, ViewportCommand::Close);
+                }
+                self.finish(ctx, 0);
+            } else {
+                ctx.request_repaint_after(at.saturating_duration_since(now));
+            }
+        }
         if self.done {
             if self
                 .exit_at
@@ -1534,6 +1592,46 @@ impl eframe::App for CosnipApp {
 
 fn texture_tile_size(ctx: &egui::Context) -> u32 {
     ctx.input(|i| i.max_texture_side).clamp(64, 2048) as u32
+}
+
+fn create_pin(ctx: &egui::Context, image: Frame, rect: Rect) -> Result<Pin, String> {
+    let mut tiles = Vec::new();
+    let max_side = texture_tile_size(ctx);
+    for y in (0..image.height()).step_by(max_side as usize) {
+        for x in (0..image.width()).step_by(max_side as usize) {
+            let width = max_side.min(image.width() - x);
+            let height = max_side.min(image.height() - y);
+            let tile_rect = Rect::new(x as i32, y as i32, width, height);
+            let tile = crop(&image, tile_rect).map_err(|error| error.to_string())?;
+            let size = [tile.width() as usize, tile.height() as usize];
+            let color = ColorImage::from_rgba_unmultiplied(size, tile.rgba());
+            let texture = ctx.load_texture(format!("pin-{x}-{y}"), color, TextureOptions::LINEAR);
+            tiles.push(PinTile {
+                texture,
+                x: tile_rect.x,
+                y: tile_rect.y,
+                width,
+                height,
+            });
+        }
+    }
+    let position = pin_position(rect, ctx.pixels_per_point());
+    Ok(Pin {
+        frame: image,
+        tiles,
+        position,
+        scale: 1.0,
+        viewport: ViewportId::from_hash_of(PIN_ID),
+        drag_start_global: None,
+        drag_start_position: position,
+        dragging: false,
+    })
+}
+
+fn clamp_pin_position(position: (i32, i32), image: (u32, u32), desktop: (u32, u32)) -> (i32, i32) {
+    let max_x = desktop.0.saturating_sub(image.0) as i32;
+    let max_y = desktop.1.saturating_sub(image.1) as i32;
+    (position.0.clamp(0, max_x), position.1.clamp(0, max_y))
 }
 
 fn pin_position(rect: Rect, pixels_per_point: f32) -> (f32, f32) {

@@ -12,10 +12,13 @@ assets; it does not ship or copy reference code, strings, or resources. See
 **M0 reference analysis** is complete and accepted (Feature 001).
 
 **MVP (Feature 002) is implemented**, **Feature 003 adds lossless GNOME capture and
-multi-monitor selection**, and **Feature 004 adds selection editing and annotations**:
+multi-monitor selection**, **Feature 004 adds selection editing and annotations**, and
+**Feature 005 adds clipboard paste and pinning**:
 
 - `cosnip snip` captures the desktop, shows a full-screen selection overlay, and copies, saves, or
   pins the selected region.
+- `cosnip paste` reads an image from the system clipboard (or a PNG via `--file`) and opens a pin
+  at the pointer without starting a capture or showing the snip overlay.
 - X11/Xorg capture uses native X11.
 - GNOME 49 Wayland uses **Mutter ScreenCast + PipeWire raw BGRx frames** (lossless). The old
   `org.gnome.Shell.Screencast` H.264 path remains as an automatic, logged fallback.
@@ -40,7 +43,7 @@ multi-monitor selection**, and **Feature 004 adds selection editing and annotati
 
 Still out of scope: post-commit annotation editing/moving/rotation, tray, global hotkeys, settings
 UI, single-instance IPC, history, per-monitor native-resolution output, KDE/portal capture, OCR,
-and paste-from-clipboard.
+and text/HTML/URI/color clipboard paste.
 
 ## Build
 
@@ -70,6 +73,12 @@ target/release/cosnip snip --area 100 100 500 300 --pin
 
 # Full screen, copy
 target/release/cosnip snip --full --copy
+
+# Pin the clipboard image at the pointer
+target/release/cosnip paste
+
+# Pin a PNG file at the pointer
+target/release/cosnip paste --file /tmp/cosnip.png
 
 # Diagnostics
 target/release/cosnip --doctor
@@ -128,7 +137,10 @@ directions and HiDPI pin placement.
 - Mosaic/blur previews are block approximations; the saved/copied/pinned output uses the full
   software effect.
 - The overlay does not show persistent shortcut tips; shortcuts are documented here and in tooltips.
-- No tray/global hotkeys yet; use a desktop shortcut that invokes `cosnip snip`.
+- No tray/global hotkeys yet; use a desktop shortcut that invokes `cosnip snip` or
+  `cosnip paste`.
+- Clipboard paste is image-only. Text, HTML, URI-list, and color payloads are future work;
+  `--file` accepts PNG only.
 - Clipboard persistence depends on a desktop clipboard manager; on a bare X11 session without one,
   the image may disappear when the process exits.
 - Pins are opaque image-sized windows on GL configurations without alpha; shadows/rounded
@@ -178,6 +190,13 @@ target/debug/cosnip snip --save /tmp/drag.png --no-copy
 ```
 
 Drag across the 960-pixel boundary with an XTest tool; a 900→1100 horizontal drag saves 200 px.
+
+Paste smoke test (closes the pin automatically, exits 0):
+
+```bash
+COSNIP_TEST_PIN_CLOSE_MS=2500 \
+target/release/cosnip paste --file /tmp/known.png
+```
 
 Performance on the target (debug build): X11 capture ~0.5 s at 3840x1080, ~12–35 ms at 1080p;
 GNOME Mutter/PipeWire capture-to-overlay 142–412 ms at 1920x1080 (release mixed-scale dual

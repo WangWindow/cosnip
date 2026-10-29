@@ -4,4 +4,4 @@
 mod app;
 mod icons;
 
-pub use app::{Outcome, UiOptions, run};
+pub use app::{Outcome, UiOptions, run, run_pin};

@@ -23,6 +23,15 @@ struct Cli {
 enum Command {
     /// Capture the desktop and select a region.
     Snip(SnipArgs),
+    /// Paste a clipboard image as a pin.
+    Paste(PasteArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct PasteArgs {
+    /// Pin this PNG file instead of the clipboard image.
+    #[arg(long, value_name = "PATH")]
+    file: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -55,11 +64,14 @@ fn main() -> ExitCode {
     if cli.doctor {
         return doctor();
     }
-    let Some(Command::Snip(args)) = cli.command else {
-        eprintln!("cosnip: use `cosnip snip` or `cosnip --doctor`");
-        return ExitCode::from(2);
-    };
-    snip(args)
+    match cli.command {
+        Some(Command::Snip(args)) => snip(args),
+        Some(Command::Paste(args)) => paste(args),
+        None => {
+            eprintln!("cosnip: use `cosnip snip`, `cosnip paste`, or `cosnip --doctor`");
+            ExitCode::from(2)
+        }
+    }
 }
 
 fn snip(args: SnipArgs) -> ExitCode {
@@ -143,6 +155,40 @@ fn snip(args: SnipArgs) -> ExitCode {
         return ExitCode::from(outcome.code as u8);
     }
     ExitCode::SUCCESS
+}
+
+fn paste(args: PasteArgs) -> ExitCode {
+    if std::env::var_os("DISPLAY").is_none() {
+        eprintln!("cosnip: paste requires X11 or XWayland; DISPLAY is not set");
+        return ExitCode::from(3);
+    }
+    let frame = match load_paste_frame(&args) {
+        Ok(frame) => frame,
+        Err((code, message)) => {
+            eprintln!("cosnip: {message}");
+            return ExitCode::from(code);
+        }
+    };
+    let position = cosnip_platform::global_pointer();
+    let outcome = cosnip_ui::run_pin(frame, position);
+    if outcome.code != 0 {
+        return ExitCode::from(outcome.code as u8);
+    }
+    ExitCode::SUCCESS
+}
+
+fn load_paste_frame(args: &PasteArgs) -> Result<cosnip_core::Frame, (u8, String)> {
+    if let Some(path) = &args.file {
+        let bytes = std::fs::read(path)
+            .map_err(|error| (2u8, format!("cannot read {}: {error}", path.display())))?;
+        return cosnip_imaging::decode_png(&bytes).map_err(|error| {
+            (
+                2u8,
+                format!("cannot decode {} as PNG: {error}", path.display()),
+            )
+        });
+    }
+    cosnip_platform::clipboard_image().map_err(|error| (3u8, error.to_string()))
 }
 
 fn initial_selection(args: &SnipArgs, width: u32, height: u32) -> Result<Option<Rect>, String> {

@@ -5,7 +5,7 @@ pub mod clipboard;
 pub mod paths;
 pub mod pointer;
 
-pub use clipboard::{ClipboardOwner, clipboard_available};
+pub use clipboard::{ClipboardOwner, clipboard_available, clipboard_image};
 pub use paths::{atomic_write, default_save_path, pictures_dir};
 pub use pointer::{global_pointer, primary_button_down};
 

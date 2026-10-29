@@ -88,8 +88,8 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | BEH-020 right-click finish/re-edit | partial | finishes a draft or returns to Select; no re-edit after commit |
 | BEH-021 text/CJK/IME | partial | egui IME editor + cosmic-text output; system CJK fallback, no rotation |
 | BEH-022 image clipboard | parity | 500x300 read by native Wayland GTK4 after exit; GNOME capture is now lossless |
-| BEH-023 text/HTML/URI/color clipboard | deferred | later feature |
-| BEH-024..026 hotkeys | deferred | use a desktop shortcut invoking `cosnip snip` |
+| BEH-023 text/HTML/URI/color clipboard | deferred | later feature; image clipboard read is implemented |
+| BEH-024..026 hotkeys | partial | `cosnip paste` implements the F3 image-paste behavior; F1/F3 global hotkeys still use a desktop shortcut |
 | BEH-027..029 CLI | partial | `snip`, `--area`, `--full`, `--delay`, `--copy`, `--save`, `--pin`; other commands later |
 | BEH-030/031 config/history | deferred | no config or history in MVP |
 | BEH-032 tray | deferred | no tray in MVP |
@@ -134,3 +134,16 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | Persistent tips | absent by design; README/--help carry the shortcut reference |
 | Pin | 700x450 pin at (200,150) shows the annotated rectangle |
 | IME on real GNOME | open; requires an interactive IME session |
+
+### Feature 005 Evidence
+
+| Check | Evidence |
+|---|---|
+| Clipboard image paste | `cosnip snip --area 300 200 500 300 --copy`, then `cosnip paste` opened a 500x300 pin at the pointer |
+| PNG file paste | `cosnip paste --file area.png` opened a 500x300 pin at (1000,1000) on the 2x desktop |
+| Pointer clamping | pointer at (6900,2000) with a 500x300 image produced a pin at (6476,2000) |
+| Text-only clipboard | `wl-copy` text then `cosnip paste` exited 3 with "clipboard does not contain an image" and no window |
+| Invalid file | missing path and `Cargo.toml` both exited 2 with actionable file/PNG messages |
+| No capture path | paste logs show no ScreenCast/PipeWire capture and no temporary media |
+| Pin rendering | grabbed pin contents matched the source image; tiling/close button present |
+| Real-mouse pin interaction | open; synthetic XTest events do not reach non-fullscreen XWayland windows on the host |

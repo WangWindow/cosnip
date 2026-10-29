@@ -12,12 +12,33 @@ fn version_is_printed() {
 }
 
 #[test]
-fn help_lists_snip() {
+fn help_lists_snip_and_paste() {
     let output = Command::new(bin()).arg("--help").output().unwrap();
     assert!(output.status.success());
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("snip"));
+    assert!(text.contains("paste"));
     assert!(text.contains("doctor"));
+}
+
+#[test]
+fn paste_missing_file_fails() {
+    let output = Command::new(bin())
+        .args(["paste", "--file", "/definitely/missing-cosnip.png"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot read"));
+}
+
+#[test]
+fn paste_non_png_fails() {
+    let output = Command::new(bin())
+        .args(["paste", "--file", "Cargo.toml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("PNG"));
 }
 
 #[test]
