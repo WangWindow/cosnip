@@ -15,8 +15,9 @@ license, and attack surface (Constitution III).
 | `x11rb` | 0.13 | MIT OR Apache-2.0 | X11 capture, XShape, XFixes, XGrabKey, screen info |
 | `arboard` | 3 | MIT OR Apache-2.0 | Clipboard bridge; native Wayland helper may be needed later |
 | `image` | 0.25 | MIT OR Apache-2.0 | PNG/JPEG/WebP output; enable only needed codecs |
-| `tiny-skia` | planned for annotations | BSD-3-Clause | CPU rasterization; not used by the MVP |
-| `cosmic-text` | planned for annotations | MIT OR Apache-2.0 | Text shaping and system-font fallback |
+| `tiny-skia` | planned for annotations | BSD-3-Clause | CPU rasterization; not used yet |
+| `cosmic-text` | 0.19 | MIT OR Apache-2.0 | Text shaping/rasterization and system-font fallback for annotation output |
+| `swash` / `fontdb` / `harfrust` | transitive via cosmic-text | MIT OR Apache-2.0 | Glyph rasterization, font discovery, shaping |
 | `kurbo` | not used (MVP uses integer core geometry) | MIT OR Apache-2.0 | Available for later vector paths |
 | `zbus` | 6.1 | MIT | Mutter ScreenCast D-Bus session/signal; `zbus::block_on` keeps one connection alive |
 | `pipewire` | 0.10.1 | MIT | Lossless Mutter ScreenCast raw-frame capture; feature `v0_3_44`; target node passed to `Stream::connect` |
@@ -56,6 +57,9 @@ license, and attack surface (Constitution III).
 
 These are build-time only. The resulting binary links `libpipewire-0.3.so.0`, which is present on
 GNOME/PipeWire systems.
+
+`cosmic-text` uses the system font database for text annotations. A CJK font (for example Noto
+Sans CJK) is required to render CJK text; the rest of the annotation renderer is pure Rust.
 
 The analysis tools are development-time instruments. They must not become runtime, build, or test
 dependencies (Constitution II).

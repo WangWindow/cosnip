@@ -10,8 +10,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use cosnip_capture::{CaptureBackendKind, MonitorInfo};
-use cosnip_core::{Frame, OutputRequest, Point, Rect, Selection};
-use cosnip_imaging::{crop, encode_png};
+use cosnip_core::{
+    Annotation, AnnotationDocument, AnnotationKind, Frame, Handle, OutputRequest, Point, Rect,
+    Selection, Tool,
+};
+use cosnip_imaging::{crop, encode_png, render};
 use cosnip_platform::{
     ClipboardOwner, atomic_write, default_save_path, global_pointer, primary_button_down,
 };
@@ -67,6 +70,32 @@ enum Action {
     Save,
     Pin,
 }
+
+#[derive(Clone, Copy, Debug)]
+enum DragMode {
+    NewSelection,
+    MoveSelection { start: Rect },
+    ResizeSelection { handle: Handle },
+    Annotation,
+}
+
+struct TextEditor {
+    monitor: usize,
+    position: Point,
+    text: String,
+    focus_requested: bool,
+}
+
+const PALETTE: [[u8; 4]; 7] = [
+    [255, 64, 64, 255],
+    [255, 196, 0, 255],
+    [80, 220, 100, 255],
+    [80, 160, 255, 255],
+    [200, 120, 255, 255],
+    [255, 255, 255, 255],
+    [0, 0, 0, 255],
+];
+const WIDTHS: [u32; 3] = [1, 3, 6];
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outcome {
@@ -126,6 +155,14 @@ struct CosnipApp {
     pointer_monitor: Option<usize>,
     drag_anchor: Option<Point>,
     drag_monitor: Option<usize>,
+    drag_mode: Option<DragMode>,
+    annotations: AnnotationDocument,
+    draft: Option<Annotation>,
+    tool: Tool,
+    color: [u8; 4],
+    line_width: u32,
+    next_number: u32,
+    text_editor: Option<TextEditor>,
     pin: Option<Pin>,
     clipboard: Option<ClipboardOwner>,
     outcome: Arc<Mutex<Outcome>>,
@@ -186,6 +223,14 @@ impl CosnipApp {
             pointer_monitor: None,
             drag_anchor: None,
             drag_monitor: None,
+            drag_mode: None,
+            annotations: AnnotationDocument::default(),
+            draft: None,
+            tool: Tool::Select,
+            color: PALETTE[0],
+            line_width: 3,
+            next_number: 1,
+            text_editor: None,
             pin: None,
             clipboard: None,
             outcome,
@@ -255,24 +300,24 @@ impl CosnipApp {
         self.selection.rect().filter(|r| !r.is_empty())
     }
 
-    fn crop_selection(&mut self) -> Result<Frame, String> {
+    fn rendered_selection(&self) -> Result<(Frame, Rect), String> {
         let rect = self.selected_rect().ok_or("no selection")?;
-        crop(&self.frame, rect).map_err(|e| e.to_string())
+        let image =
+            render(&self.frame, rect, self.annotations.items()).map_err(|e| e.to_string())?;
+        Ok((image, rect))
     }
 
-    fn copy(&mut self) -> Result<(), String> {
-        let image = self.crop_selection()?;
+    fn copy_image(&mut self, image: &Frame) -> Result<(), String> {
         let mut owner = ClipboardOwner::new().map_err(|e| e.to_string())?;
-        owner.set_image(&image).map_err(|e| e.to_string())?;
+        owner.set_image(image).map_err(|e| e.to_string())?;
         self.clipboard = Some(owner);
         self.outcome.lock().unwrap().copied = true;
         eprintln!("cosnip: copied selection");
         Ok(())
     }
 
-    fn save(&mut self, explicit: Option<PathBuf>) -> Result<PathBuf, String> {
-        let image = self.crop_selection()?;
-        let bytes = encode_png(&image).map_err(|e| e.to_string())?;
+    fn save_image(&mut self, image: &Frame, explicit: Option<PathBuf>) -> Result<PathBuf, String> {
+        let bytes = encode_png(image).map_err(|e| e.to_string())?;
         let path = match explicit {
             Some(path) => path,
             None => {
@@ -285,9 +330,7 @@ impl CosnipApp {
         Ok(path)
     }
 
-    fn pin(&mut self, ctx: &egui::Context) -> Result<(), String> {
-        let rect = self.selected_rect().ok_or("no selection")?;
-        let image = crop(&self.frame, rect).map_err(|e| e.to_string())?;
+    fn pin_image(&mut self, ctx: &egui::Context, image: Frame, rect: Rect) -> Result<(), String> {
         let mut tiles = Vec::new();
         let max_side = texture_tile_size(ctx);
         for y in (0..image.height()).step_by(max_side as usize) {
@@ -328,6 +371,7 @@ impl CosnipApp {
     }
 
     fn confirm(&mut self, ctx: &egui::Context, action: Action) {
+        self.commit_text_editor();
         let (want_copy, want_save, want_pin) = match action {
             Action::All => (
                 self.output.copy,
@@ -342,19 +386,22 @@ impl CosnipApp {
             return;
         }
 
-        if let Err(error) = self.crop_selection() {
-            eprintln!("cosnip: {error}");
-            self.finish(ctx, 5);
-            return;
-        }
-        if want_copy && let Err(error) = self.copy() {
+        let (image, rect) = match self.rendered_selection() {
+            Ok(result) => result,
+            Err(error) => {
+                eprintln!("cosnip: {error}");
+                self.finish(ctx, 5);
+                return;
+            }
+        };
+        if want_copy && let Err(error) = self.copy_image(&image) {
             eprintln!("cosnip: clipboard failed: {error}");
             self.finish(ctx, 5);
             return;
         }
         if want_save {
             let path = self.save_path.clone();
-            match self.save(path) {
+            match self.save_image(&image, path) {
                 Ok(path) => eprintln!("cosnip: saved {}", path.display()),
                 Err(error) => {
                     eprintln!("cosnip: save failed: {error}");
@@ -364,7 +411,7 @@ impl CosnipApp {
             }
         }
         if want_pin {
-            if let Err(error) = self.pin(ctx) {
+            if let Err(error) = self.pin_image(ctx, image, rect) {
                 eprintln!("cosnip: pin failed: {error}");
                 self.finish(ctx, 5);
             }
@@ -430,33 +477,47 @@ impl CosnipApp {
             Id::new(("overlay-canvas", monitor.index)),
             Sense::click_and_drag(),
         );
+        let text_editing = self.text_editor.is_some();
+        let over_chrome = ctx.is_pointer_over_egui();
         if ctx.input(|i| i.pointer.primary_pressed())
             && response.hovered()
             && let Some(p) = pointer_global
         {
-            self.drag_anchor = Some(p);
-            self.drag_monitor = Some(monitor.index);
-            self.selection.begin(p);
+            if self.text_editor.is_some() {
+                if !over_chrome {
+                    self.commit_text_editor();
+                }
+            } else if !over_chrome {
+                self.begin_pointer_action(p, monitor.index);
+            }
         }
         if response.drag_started()
-            && self.drag_anchor.is_none()
+            && self.drag_mode.is_none()
+            && self.text_editor.is_none()
+            && !over_chrome
             && let Some(p) = pointer_global
         {
-            self.drag_anchor = Some(p);
-            self.drag_monitor = Some(monitor.index);
-            self.selection.begin(p);
+            self.begin_pointer_action(p, monitor.index);
         }
         let is_drag_monitor = self.drag_monitor == Some(monitor.index);
-        if let (Some(anchor), Some(current)) = (self.drag_anchor, pointer_global)
+        if let Some(current) = pointer_global
             && is_drag_monitor
             && (response.dragged() || ctx.input(|i| i.pointer.primary_down()))
         {
             let square = ctx.input(|i| i.modifiers.shift);
-            self.selection.drag_to(anchor, current, bounds, square);
+            self.update_drag(current, square, bounds);
         }
         if is_drag_monitor && (response.drag_stopped() || ctx.input(|i| i.pointer.any_released())) {
-            self.drag_anchor = None;
-            self.drag_monitor = None;
+            self.finish_drag();
+        }
+        if ctx.input(|i| i.pointer.secondary_pressed()) && response.hovered() && !over_chrome {
+            if self.drag_mode.is_some() {
+                self.finish_drag();
+            } else if self.text_editor.is_some() {
+                self.commit_text_editor();
+            } else if self.tool != Tool::Select {
+                self.set_tool(Tool::Select);
+            }
         }
 
         // Draw this monitor's slice of the frozen frame, tile by tile.
@@ -486,10 +547,18 @@ impl CosnipApp {
         draw_dim(ui, screen, local_selection);
         if let Some(selection) = selection {
             let local = self.global_to_local(selection, monitor, pixels_per_point);
-            draw_selection(ui, screen, local);
+            draw_selection(ui, screen, local, self.tool == Tool::Select);
+            let clip = local.intersect(screen);
+            for annotation in self.annotations.items() {
+                self.draw_annotation_preview(ui, monitor, pixels_per_point, annotation, clip);
+            }
+            if let Some(draft) = &self.draft {
+                self.draw_annotation_preview(ui, monitor, pixels_per_point, draft, clip);
+            }
         }
         if let Some(local_pointer) = hover
             && pointer_inside
+            && !over_chrome
         {
             draw_crosshair(ui, screen, local_pointer);
             self.draw_magnifier(ui, screen, local_pointer, pointer_global.unwrap());
@@ -503,11 +572,12 @@ impl CosnipApp {
                 self.show_toolbar(&ctx, monitor, selection, screen, pixels_per_point);
             }
         }
+        self.show_text_editor(ui, monitor, pixels_per_point);
         let tips_monitor = self.pointer_monitor.or(self.focused_monitor).unwrap_or(0);
         if tips_monitor == monitor.index {
             draw_tips(ui, screen);
         }
-        if self.focused_monitor == Some(monitor.index) {
+        if self.focused_monitor == Some(monitor.index) && !text_editing {
             self.handle_keys(&ctx, bounds);
         }
     }
@@ -543,8 +613,544 @@ impl CosnipApp {
         )
     }
 
+    fn point_to_local(
+        &self,
+        point: Point,
+        monitor: &OverlayMonitor,
+        pixels_per_point: f32,
+    ) -> egui::Pos2 {
+        let scale = pixels_per_point.max(f32::EPSILON);
+        egui::pos2(
+            (point.x - monitor.x) as f32 / scale,
+            (point.y - monitor.y) as f32 / scale,
+        )
+    }
+
+    fn begin_pointer_action(&mut self, point: Point, monitor_index: usize) {
+        let selection = self.selected_rect();
+        let inside_selection = selection.is_some_and(|rect| rect.contains(point));
+        self.drag_anchor = Some(point);
+        self.drag_monitor = Some(monitor_index);
+
+        if self.tool == Tool::Select {
+            if let Some(rect) = selection {
+                if let Some(handle) = self.selection.handle_at(point, 8) {
+                    self.drag_mode = Some(DragMode::ResizeSelection { handle });
+                    return;
+                }
+                if rect.contains(point) {
+                    self.drag_mode = Some(DragMode::MoveSelection { start: rect });
+                    return;
+                }
+            }
+            self.selection.begin(point);
+            self.drag_mode = Some(DragMode::NewSelection);
+            return;
+        }
+
+        if !inside_selection {
+            self.selection.begin(point);
+            self.drag_mode = Some(DragMode::NewSelection);
+            return;
+        }
+
+        match self.tool {
+            Tool::Eraser => {
+                self.annotations.remove_at(point);
+                self.drag_anchor = None;
+                self.drag_monitor = None;
+                self.drag_mode = None;
+            }
+            Tool::Text => {
+                self.text_editor = Some(TextEditor {
+                    monitor: monitor_index,
+                    position: point,
+                    text: String::new(),
+                    focus_requested: false,
+                });
+                self.drag_anchor = None;
+                self.drag_monitor = None;
+                self.drag_mode = None;
+            }
+            Tool::Number => {
+                let value = self.next_number;
+                self.next_number = self.next_number.saturating_add(1);
+                self.annotations.add(Annotation::new(
+                    AnnotationKind::Number {
+                        position: point,
+                        value,
+                    },
+                    self.color,
+                    self.line_width,
+                ));
+                self.drag_anchor = None;
+                self.drag_monitor = None;
+                self.drag_mode = None;
+            }
+            Tool::Magnifier => {
+                self.annotations.add(Annotation::new(
+                    AnnotationKind::Magnifier {
+                        center: point,
+                        radius: 48,
+                        zoom: 2,
+                    },
+                    self.color,
+                    self.line_width,
+                ));
+                self.drag_anchor = None;
+                self.drag_monitor = None;
+                self.drag_mode = None;
+            }
+            tool if tool.is_draw_tool() => {
+                self.draft = self.new_draft(point);
+                self.drag_mode = Some(DragMode::Annotation);
+            }
+            _ => {
+                self.drag_anchor = None;
+                self.drag_monitor = None;
+                self.drag_mode = None;
+            }
+        }
+    }
+
+    fn new_draft(&self, point: Point) -> Option<Annotation> {
+        let kind = match self.tool {
+            Tool::Rectangle => AnnotationKind::Rectangle {
+                rect: Rect::new(point.x, point.y, 0, 0),
+            },
+            Tool::Ellipse => AnnotationKind::Ellipse {
+                rect: Rect::new(point.x, point.y, 0, 0),
+            },
+            Tool::Arrow => AnnotationKind::Arrow {
+                start: point,
+                end: point,
+            },
+            Tool::Line => AnnotationKind::Line {
+                start: point,
+                end: point,
+            },
+            Tool::Pencil => AnnotationKind::Pencil {
+                points: vec![point],
+            },
+            Tool::Marker => AnnotationKind::Marker {
+                points: vec![point],
+            },
+            Tool::Mosaic => AnnotationKind::Mosaic {
+                rect: Rect::new(point.x, point.y, 0, 0),
+            },
+            Tool::Blur => AnnotationKind::Blur {
+                rect: Rect::new(point.x, point.y, 0, 0),
+            },
+            _ => return None,
+        };
+        Some(Annotation::new(kind, self.color, self.line_width))
+    }
+
+    fn update_drag(&mut self, current: Point, square: bool, bounds: Rect) {
+        match self.drag_mode {
+            Some(DragMode::NewSelection) => {
+                if let Some(anchor) = self.drag_anchor {
+                    self.selection.drag_to(anchor, current, bounds, square);
+                }
+            }
+            Some(DragMode::MoveSelection { start }) => {
+                if let Some(anchor) = self.drag_anchor {
+                    self.selection.move_from(
+                        start,
+                        current.x - anchor.x,
+                        current.y - anchor.y,
+                        bounds,
+                    );
+                }
+            }
+            Some(DragMode::ResizeSelection { handle }) => {
+                self.selection.resize(handle, current, bounds, 4);
+            }
+            Some(DragMode::Annotation) => {
+                let Some(anchor) = self.drag_anchor else {
+                    return;
+                };
+                let Some(draft) = self.draft.as_mut() else {
+                    return;
+                };
+                match &mut draft.kind {
+                    AnnotationKind::Rectangle { rect }
+                    | AnnotationKind::Ellipse { rect }
+                    | AnnotationKind::Mosaic { rect }
+                    | AnnotationKind::Blur { rect } => {
+                        *rect = if square {
+                            Rect::square_from_points(anchor, current)
+                        } else {
+                            Rect::from_points(anchor, current)
+                        }
+                        .clamp_to(bounds)
+                        .unwrap_or(Rect::new(anchor.x, anchor.y, 1, 1));
+                    }
+                    AnnotationKind::Arrow { end, .. } | AnnotationKind::Line { end, .. } => {
+                        *end = current;
+                    }
+                    AnnotationKind::Pencil { points } | AnnotationKind::Marker { points }
+                        if points.last().is_none_or(|last| *last != current) =>
+                    {
+                        points.push(current);
+                    }
+                    _ => {}
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn finish_drag(&mut self) {
+        if matches!(self.drag_mode, Some(DragMode::Annotation))
+            && let Some(draft) = self.draft.take()
+            && draft_is_valid(&draft)
+        {
+            self.annotations.add(draft);
+        }
+        self.draft = None;
+        self.drag_anchor = None;
+        self.drag_monitor = None;
+        self.drag_mode = None;
+        if self.selection.rect().is_some_and(|rect| rect.is_empty()) {
+            self.selection.clear();
+        }
+    }
+
+    fn cancel_drag(&mut self) -> bool {
+        if self.drag_mode.is_none() {
+            return false;
+        }
+        self.draft = None;
+        self.drag_anchor = None;
+        self.drag_monitor = None;
+        self.drag_mode = None;
+        if self.selection.rect().is_some_and(|rect| rect.is_empty()) {
+            self.selection.clear();
+        }
+        true
+    }
+
+    fn commit_text_editor(&mut self) {
+        let Some(editor) = self.text_editor.take() else {
+            return;
+        };
+        let text = editor.text.trim();
+        if text.is_empty() {
+            return;
+        }
+        self.annotations.add(Annotation::new(
+            AnnotationKind::Text {
+                position: editor.position,
+                text: text.to_string(),
+                size: 20,
+            },
+            self.color,
+            self.line_width,
+        ));
+    }
+
+    fn set_tool(&mut self, tool: Tool) {
+        if self.tool == tool {
+            return;
+        }
+        self.cancel_drag();
+        self.commit_text_editor();
+        self.tool = tool;
+    }
+
+    fn show_text_editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        monitor: &OverlayMonitor,
+        pixels_per_point: f32,
+    ) {
+        let Some(editor_info) = self
+            .text_editor
+            .as_ref()
+            .map(|editor| (editor.monitor, editor.position))
+        else {
+            return;
+        };
+        if editor_info.0 != monitor.index {
+            return;
+        }
+        let position = self.point_to_local(editor_info.1, monitor, pixels_per_point);
+        let Some(editor) = self.text_editor.as_mut() else {
+            return;
+        };
+        ui.ctx()
+            .send_viewport_cmd(ViewportCommand::CursorVisible(true));
+        self.cursor_hidden[monitor.index] = false;
+        let id = Id::new("cosnip-text-editor");
+        let mut commit = false;
+        let mut cancel = false;
+        egui::Area::new(id)
+            .fixed_pos(position)
+            .order(Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::NONE
+                    .fill(Color32::from_black_alpha(220))
+                    .inner_margin(egui::Margin::same(4))
+                    .corner_radius(egui::CornerRadius::same(4))
+                    .show(ui, |ui| {
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut editor.text)
+                                .desired_width(220.0)
+                                .hint_text("Text"),
+                        );
+                        if !editor.focus_requested {
+                            response.request_focus();
+                            editor.focus_requested = true;
+                        }
+                        ui.label(
+                            egui::RichText::new("Enter place · Esc cancel")
+                                .size(10.0)
+                                .color(Color32::from_gray(190)),
+                        );
+                    });
+            });
+        if ui.ctx().input(|i| i.key_pressed(Key::Enter)) {
+            commit = true;
+        }
+        if ui.ctx().input(|i| i.key_pressed(Key::Escape)) {
+            cancel = true;
+        }
+        if commit {
+            self.commit_text_editor();
+        } else if cancel {
+            self.text_editor = None;
+        }
+    }
+
+    fn draw_annotation_preview(
+        &self,
+        ui: &egui::Ui,
+        monitor: &OverlayMonitor,
+        pixels_per_point: f32,
+        annotation: &Annotation,
+        clip: egui::Rect,
+    ) {
+        let painter = ui.painter().with_clip_rect(clip);
+        let color = Color32::from_rgba_unmultiplied(
+            annotation.color[0],
+            annotation.color[1],
+            annotation.color[2],
+            annotation.color[3],
+        );
+        let width = annotation.width.max(1) as f32;
+        let stroke = Stroke::new(width, color);
+        match &annotation.kind {
+            AnnotationKind::Rectangle { rect } => {
+                let local = self.global_to_local(*rect, monitor, pixels_per_point);
+                painter.rect_stroke(local, 0.0, stroke, StrokeKind::Inside);
+            }
+            AnnotationKind::Ellipse { rect } => {
+                let local = self.global_to_local(*rect, monitor, pixels_per_point);
+                painter.add(egui::Shape::ellipse_stroke(
+                    local.center(),
+                    local.size() / 2.0,
+                    stroke,
+                ));
+            }
+            AnnotationKind::Arrow { start, end } => {
+                let start = self.point_to_local(*start, monitor, pixels_per_point);
+                let end = self.point_to_local(*end, monitor, pixels_per_point);
+                painter.line_segment([start, end], stroke);
+                let angle = (end.y - start.y).atan2(end.x - start.x);
+                let length = (12.0 + width * 2.0).min(40.0);
+                for spread in [-0.5, 0.5] {
+                    let tip = end
+                        - egui::vec2(
+                            length * (angle + spread).cos(),
+                            length * (angle + spread).sin(),
+                        );
+                    painter.line_segment([end, tip], stroke);
+                }
+            }
+            AnnotationKind::Line { start, end } => {
+                painter.line_segment(
+                    [
+                        self.point_to_local(*start, monitor, pixels_per_point),
+                        self.point_to_local(*end, monitor, pixels_per_point),
+                    ],
+                    stroke,
+                );
+            }
+            AnnotationKind::Pencil { points } => {
+                draw_polyline_preview(&painter, points, monitor, pixels_per_point, stroke);
+            }
+            AnnotationKind::Marker { points } => {
+                let marker = Stroke::new(
+                    (width * 4.0).max(4.0),
+                    Color32::from_rgba_unmultiplied(
+                        annotation.color[0],
+                        annotation.color[1],
+                        annotation.color[2],
+                        96,
+                    ),
+                );
+                draw_polyline_preview(&painter, points, monitor, pixels_per_point, marker);
+            }
+            AnnotationKind::Text {
+                position,
+                text,
+                size,
+            } => {
+                let position = self.point_to_local(*position, monitor, pixels_per_point);
+                painter.text(
+                    position,
+                    egui::Align2::LEFT_TOP,
+                    text,
+                    egui::FontId::proportional(*size as f32),
+                    color,
+                );
+            }
+            AnnotationKind::Number { position, value } => {
+                let position = self.point_to_local(*position, monitor, pixels_per_point);
+                let radius = (14.0 + width).clamp(12.0, 24.0);
+                painter.circle_filled(position, radius, color);
+                painter.text(
+                    position,
+                    egui::Align2::CENTER_CENTER,
+                    value.to_string(),
+                    egui::FontId::proportional(radius * 1.4),
+                    Color32::WHITE,
+                );
+            }
+            AnnotationKind::Mosaic { rect } => {
+                self.draw_block_effect_preview(
+                    &painter,
+                    monitor,
+                    pixels_per_point,
+                    *rect,
+                    (annotation.width * 4).max(8),
+                );
+            }
+            AnnotationKind::Blur { rect } => {
+                self.draw_block_effect_preview(
+                    &painter,
+                    monitor,
+                    pixels_per_point,
+                    *rect,
+                    (annotation.width * 2).max(3),
+                );
+            }
+            AnnotationKind::Magnifier { .. } => {
+                self.draw_magnifier_annotation_preview(
+                    &painter,
+                    monitor,
+                    pixels_per_point,
+                    annotation,
+                );
+            }
+        }
+    }
+
+    fn draw_block_effect_preview(
+        &self,
+        painter: &egui::Painter,
+        monitor: &OverlayMonitor,
+        pixels_per_point: f32,
+        rect: Rect,
+        requested_block: u32,
+    ) {
+        let mut block = requested_block.max(2);
+        let mut columns = rect.width / block + 1;
+        let mut rows = rect.height / block + 1;
+        while columns.saturating_mul(rows) > 4096 {
+            block = block.saturating_mul(2);
+            columns = rect.width / block + 1;
+            rows = rect.height / block + 1;
+        }
+        let mut y = rect.y;
+        while y < rect.bottom() {
+            let mut x = rect.x;
+            let height = block.min((rect.bottom() - y).max(1) as u32);
+            while x < rect.right() {
+                let width = block.min((rect.right() - x).max(1) as u32);
+                let sample_x = x + width as i32 / 2;
+                let sample_y = y + height as i32 / 2;
+                let color = self
+                    .frame
+                    .pixel(sample_x, sample_y)
+                    .map_or(Color32::BLACK, |p| Color32::from_rgb(p[0], p[1], p[2]));
+                let cell = Rect::new(x, y, width, height);
+                let local = self.global_to_local(cell, monitor, pixels_per_point);
+                painter.rect_filled(local, 0.0, color);
+                x += block as i32;
+            }
+            y += block as i32;
+        }
+    }
+
+    fn draw_magnifier_annotation_preview(
+        &self,
+        painter: &egui::Painter,
+        monitor: &OverlayMonitor,
+        pixels_per_point: f32,
+        annotation: &Annotation,
+    ) {
+        let AnnotationKind::Magnifier {
+            center,
+            radius,
+            zoom,
+        } = &annotation.kind
+        else {
+            return;
+        };
+        let center = *center;
+        let radius = *radius;
+        let zoom = (*zoom).max(1) as f32;
+        let color = Color32::from_rgba_unmultiplied(
+            annotation.color[0],
+            annotation.color[1],
+            annotation.color[2],
+            annotation.color[3],
+        );
+        let width = annotation.width.max(1) as f32;
+        let scale = pixels_per_point.max(f32::EPSILON);
+        let center_local = self.point_to_local(center, monitor, pixels_per_point);
+        let radius_local = radius as f32 / scale;
+        let cell = 4.0_f32;
+        let mut y = -radius_local;
+        while y < radius_local {
+            let mut x = -radius_local;
+            while x < radius_local {
+                if x * x + y * y <= radius_local * radius_local {
+                    let source = Point::new(
+                        center.x + (x * scale / zoom).round() as i32,
+                        center.y + (y * scale / zoom).round() as i32,
+                    );
+                    let sample = self
+                        .frame
+                        .pixel(source.x, source.y)
+                        .map_or(Color32::BLACK, |p| Color32::from_rgb(p[0], p[1], p[2]));
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(
+                            center_local + egui::vec2(x, y),
+                            egui::vec2(
+                                cell.min(radius_local - x).max(0.5),
+                                cell.min(radius_local - y).max(0.5),
+                            ),
+                        ),
+                        0.0,
+                        sample,
+                    );
+                }
+                x += cell;
+            }
+            y += cell;
+        }
+        painter.circle_stroke(
+            center_local,
+            radius_local,
+            Stroke::new(width.max(2.0), color),
+        );
+    }
+
     fn handle_keys(&mut self, ctx: &egui::Context, bounds: Rect) {
-        let (escape, enter, ctrl_c, ctrl_s, ctrl_a, pin_key, left, right, up, down) =
+        let (escape, enter, ctrl_c, ctrl_s, ctrl_a, pin_key, undo, redo, left, right, up, down) =
             ctx.input(|i| {
                 (
                     i.key_pressed(Key::Escape),
@@ -552,7 +1158,10 @@ impl CosnipApp {
                     i.modifiers.command && i.key_pressed(Key::C),
                     i.modifiers.command && i.key_pressed(Key::S),
                     i.modifiers.command && i.key_pressed(Key::A),
-                    i.modifiers.command && i.key_pressed(Key::P),
+                    i.key_pressed(Key::P),
+                    i.modifiers.command && i.key_pressed(Key::Z) && !i.modifiers.shift,
+                    i.modifiers.command
+                        && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z))),
                     i.key_pressed(Key::ArrowLeft),
                     i.key_pressed(Key::ArrowRight),
                     i.key_pressed(Key::ArrowUp),
@@ -560,8 +1169,17 @@ impl CosnipApp {
                 )
             });
         if escape {
+            if self.cancel_drag() {
+                return;
+            }
             self.finish(ctx, 6);
             return;
+        }
+        if undo {
+            self.annotations.undo();
+        }
+        if redo {
+            self.annotations.redo();
         }
         if ctrl_a {
             self.selection.full(bounds);
@@ -591,14 +1209,14 @@ impl CosnipApp {
         pixels_per_point: f32,
     ) {
         let local = self.global_to_local(selection, monitor, pixels_per_point);
-        let width = 228.0;
+        let width = 680.0;
         let x = local.left().clamp(
             screen.left() + 4.0,
             (screen.right() - width - 4.0).max(screen.left() + 4.0),
         );
         let mut y = local.bottom() + 8.0;
-        if y + 40.0 > screen.bottom() {
-            y = (local.top() - 44.0).max(screen.top() + 4.0);
+        if y + 86.0 > screen.bottom() {
+            y = (local.top() - 94.0).max(screen.top() + 4.0);
         }
         egui::Area::new(Id::new(("cosnip-toolbar", monitor.index)))
             .fixed_pos(egui::pos2(x, y))
@@ -609,7 +1227,69 @@ impl CosnipApp {
                     .inner_margin(egui::Margin::same(6))
                     .corner_radius(egui::CornerRadius::same(6))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        ui.set_max_width(width);
+                        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            for tool in Tool::ALL {
+                                if ui
+                                    .selectable_label(self.tool == tool, tool.label())
+                                    .on_hover_text(tool_hint(tool))
+                                    .clicked()
+                                {
+                                    self.set_tool(tool);
+                                }
+                            }
+                        });
+                        ui.separator();
+                        ui.horizontal_wrapped(|ui| {
+                            for color in PALETTE {
+                                let (rect, response) =
+                                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());
+                                ui.painter().rect_filled(
+                                    rect,
+                                    3.0,
+                                    Color32::from_rgba_unmultiplied(
+                                        color[0], color[1], color[2], color[3],
+                                    ),
+                                );
+                                if self.color == color {
+                                    ui.painter().rect_stroke(
+                                        rect.expand(1.0),
+                                        3.0,
+                                        Stroke::new(1.0, Color32::WHITE),
+                                        StrokeKind::Outside,
+                                    );
+                                }
+                                if response.clicked() {
+                                    self.color = color;
+                                }
+                            }
+                            ui.separator();
+                            for width in WIDTHS {
+                                if ui
+                                    .selectable_label(
+                                        self.line_width == width,
+                                        format!("{width}px"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.line_width = width;
+                                }
+                            }
+                            ui.separator();
+                            if ui
+                                .add_enabled(self.annotations.can_undo(), egui::Button::new("Undo"))
+                                .clicked()
+                            {
+                                self.annotations.undo();
+                            }
+                            if ui
+                                .add_enabled(self.annotations.can_redo(), egui::Button::new("Redo"))
+                                .clicked()
+                            {
+                                self.annotations.redo();
+                            }
+                            ui.separator();
                             if ui.button("Copy").clicked() {
                                 self.confirm(ui.ctx(), Action::Copy);
                             }
@@ -827,9 +1507,8 @@ impl eframe::App for CosnipApp {
         }
         if self.overlay_open {
             self.show_overlay(ctx);
-            if self.drag_anchor.is_some() && !primary_button_down() {
-                self.drag_anchor = None;
-                self.drag_monitor = None;
+            if self.drag_mode.is_some() && !primary_button_down() {
+                self.finish_drag();
             }
         }
         if self.pin.is_some() {
@@ -950,6 +1629,60 @@ fn selection_center_monitor(monitors: &[OverlayMonitor], selection: Rect) -> Opt
         .map(|monitor| monitor.index)
 }
 
+fn draft_is_valid(annotation: &Annotation) -> bool {
+    match &annotation.kind {
+        AnnotationKind::Rectangle { rect }
+        | AnnotationKind::Ellipse { rect }
+        | AnnotationKind::Mosaic { rect }
+        | AnnotationKind::Blur { rect } => !rect.is_empty(),
+        AnnotationKind::Arrow { start, end } | AnnotationKind::Line { start, end } => start != end,
+        AnnotationKind::Pencil { points } | AnnotationKind::Marker { points } => points.len() >= 2,
+        _ => false,
+    }
+}
+
+fn tool_hint(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Select => "Select, move, or resize the region",
+        Tool::Rectangle => "Drag a rectangle",
+        Tool::Ellipse => "Drag an ellipse",
+        Tool::Arrow => "Drag an arrow",
+        Tool::Line => "Drag a line",
+        Tool::Pencil => "Draw freehand",
+        Tool::Marker => "Draw a translucent highlighter stroke",
+        Tool::Text => "Click to place text",
+        Tool::Number => "Click to place the next number",
+        Tool::Mosaic => "Drag to pixelate",
+        Tool::Blur => "Drag to blur",
+        Tool::Magnifier => "Click to add a magnifier",
+        Tool::Eraser => "Click an annotation to erase it",
+    }
+}
+
+fn draw_polyline_preview(
+    painter: &egui::Painter,
+    points: &[Point],
+    monitor: &OverlayMonitor,
+    pixels_per_point: f32,
+    stroke: Stroke,
+) {
+    let scale = pixels_per_point.max(f32::EPSILON);
+    let points = points
+        .iter()
+        .map(|point| {
+            egui::pos2(
+                (point.x - monitor.x) as f32 / scale,
+                (point.y - monitor.y) as f32 / scale,
+            )
+        })
+        .collect::<Vec<_>>();
+    if points.len() == 1 {
+        painter.circle_filled(points[0], stroke.width / 2.0, stroke.color);
+    } else if points.len() > 1 {
+        painter.add(egui::Shape::line(points, stroke));
+    }
+}
+
 fn draw_dim(ui: &mut egui::Ui, rect: egui::Rect, selection: Option<egui::Rect>) {
     let dim = Color32::from_black_alpha(120);
     let painter = ui.painter();
@@ -985,10 +1718,13 @@ fn draw_dim(ui: &mut egui::Ui, rect: egui::Rect, selection: Option<egui::Rect>) 
     );
 }
 
-fn draw_selection(ui: &mut egui::Ui, screen: egui::Rect, rect: egui::Rect) {
+fn draw_selection(ui: &mut egui::Ui, screen: egui::Rect, rect: egui::Rect, show_handles: bool) {
     let painter = ui.painter().with_clip_rect(screen);
     let stroke = Stroke::new(2.0, Color32::from_rgb(80, 160, 255));
     painter.rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
+    if !show_handles {
+        return;
+    }
     for point in [
         rect.left_top(),
         rect.center_top(),
@@ -1024,16 +1760,16 @@ fn draw_crosshair(ui: &mut egui::Ui, rect: egui::Rect, pointer: egui::Pos2) {
 
 fn draw_tips(ui: &mut egui::Ui, screen: egui::Rect) {
     let lines = [
-        "Drag to select",
-        "Enter / Ctrl+C  Copy",
-        "Ctrl+S  Save",
-        "P  Pin",
-        "Esc  Cancel",
-        "Arrows  Nudge    Ctrl+A  All",
-        "Shift  Square",
+        "Drag to select · handles resize",
+        "Tools: click, then draw in the region",
+        "Ctrl+Z / Ctrl+Shift+Z  Undo / Redo",
+        "Right-click  Finish tool",
+        "Enter / Ctrl+C  Copy    Ctrl+S  Save",
+        "P  Pin    Esc  Cancel    Ctrl+A  All",
+        "Shift  Square    Arrows  Nudge",
     ];
     let line_height = 18.0;
-    let width = 260.0;
+    let width = 380.0;
     let height = line_height * lines.len() as f32 + 16.0;
     let rect = egui::Rect::from_min_size(
         egui::pos2(screen.left() + 16.0, screen.bottom() - height - 16.0),

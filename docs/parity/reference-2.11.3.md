@@ -61,7 +61,7 @@ path is unverified; `gap` = unresolved; `deferred` = knowingly out of MVP scope.
 - A row is not “implemented” until it has a Cosnip test and parity evidence; this matrix tracks
   the reference baseline, not product progress.
 
-## Cosnip Status (Feature 002 + 003)
+## Cosnip Status (Feature 002 + 003 + 004)
 
 This table tracks implementation progress, not reference evidence. `parity` means the behavior was
 demonstrated; `partial` means a deliberately reduced subset; `deferred` means a later feature;
@@ -73,17 +73,20 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | BEH-002 backend selection | parity (MVP subset) | X11 + GNOME Mutter/PipeWire; H.264 fallback; KDE/portal error |
 | BEH-003 GNOME portal capture | difference | Portal blocked/interactive; direct Mutter ScreenCast used instead |
 | BEH-006/011 overlay/coverage/focus | parity | One fullscreen viewport per monitor; global selection coordinates |
-| BEH-007 selection/badge/handles | partial | drag, arrows, square constraint, Ctrl+A; handles are visual, not resize handles |
+| BEH-007 selection/badge/handles | parity | Drag, arrows, square, Ctrl+A, move, and eight functional resize handles |
 | BEH-008 magnifier/color | partial | 11x11 magnifier, coordinates, RGB/HEX; no C/Shift color-copy shortcuts |
-| BEH-009 keyboard tips | partial | overlay tips panel; no window/element detection |
-| BEH-010 toolbar | partial | Copy/Save/Pin/Cancel; annotation tools deferred |
+| BEH-009 keyboard tips | partial | overlay tips panel includes tools/undo/right-click; no window/element detection |
+| BEH-010 toolbar | partial | combined annotation + Copy/Save/Pin/Cancel toolbar; no separate style panel |
 | BEH-012 override overlay | difference | WM-managed fullscreen used for focus |
 | BEH-013 pin flags | parity | override-redirect, depth 32, Utility, skip taskbar/pager |
 | BEH-014 ARGB/shadow | partial | depth 32; opaque image-sized pin, no shadow/opacity |
 | BEH-015 click-through | deferred | no toggle UI/hotkey yet |
 | BEH-016 pin interactions | partial | drag, wheel zoom, close; no rotate/flip/opacity |
 | BEH-017 native stacking | parity | native screencast shows pin above browser |
-| BEH-018..021 annotations | deferred | next feature |
+| BEH-018 annotation items | partial | rectangle/ellipse/arrow/line/pencil/marker/text/number/mosaic/blur/magnifier/eraser; no post-commit move/edit/rotate |
+| BEH-019 undo/redo | partial | add and erase history; style/move/rotate edits do not exist yet |
+| BEH-020 right-click finish/re-edit | partial | finishes a draft or returns to Select; no re-edit after commit |
+| BEH-021 text/CJK/IME | partial | egui IME editor + cosmic-text output; system CJK fallback, no rotation |
 | BEH-022 image clipboard | parity | 500x300 read by native Wayland GTK4 after exit; GNOME capture is now lossless |
 | BEH-023 text/HTML/URI/color clipboard | deferred | later feature |
 | BEH-024..026 hotkeys | deferred | use a desktop shortcut invoking `cosnip snip` |
@@ -109,3 +112,21 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | Pin after multi-monitor changes | 500x300 pin at (300,200); Escape closed it |
 | Real dual-monitor hardware | open; see tasks T057–T058 |
 | Mixed/fractional DPI | open; see tasks T059 |
+
+### Feature 004 Evidence
+
+| Check | Evidence |
+|---|---|
+| Selection resize | Xvfb drag of the SE handle changed 700x450 to 800x500 |
+| Selection move | drag inside the selection uses global offset, clamped to the frame |
+| Rectangle/ellipse/arrow | Xvfb UI + saved PNG contain the rendered shapes |
+| Text | egui editor accepted "Hello"; saved output contains rasterized text |
+| CJK fallback | unit test renders `中文` through the system font database |
+| Number | click places sequential numbered discs |
+| Mosaic/blur | Xvfb over xmessage text produced pixelated and softened output |
+| Magnifier | Xvfb output shows enlarged source text inside the circle |
+| Eraser | unit test removes the topmost annotation and is undoable |
+| Undo/redo | toolbar Undo removed the newest rectangle; Ctrl+Z works with a held modifier |
+| Output isolation | saved PNG contains annotations but no selection border, handles, toolbar, or tips |
+| Pin | 700x450 pin at (200,150) shows the annotated rectangle |
+| IME on real GNOME | open; requires an interactive IME session |

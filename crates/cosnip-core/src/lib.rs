@@ -3,12 +3,14 @@
 //!
 //! This crate has no OS, UI, or windowing dependencies.
 
+pub mod annotation;
 pub mod frame;
 pub mod geometry;
 pub mod output;
 pub mod selection;
 
+pub use annotation::{Annotation, AnnotationDocument, AnnotationKind, Tool};
 pub use frame::{Frame, FrameError};
 pub use geometry::{Point, Rect, Size};
 pub use output::OutputRequest;
-pub use selection::Selection;
+pub use selection::{Handle, Selection};

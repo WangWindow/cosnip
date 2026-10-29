@@ -11,8 +11,8 @@ assets; it does not ship or copy reference code, strings, or resources. See
 
 **M0 reference analysis** is complete and accepted (Feature 001).
 
-**MVP (Feature 002) is implemented**, and **Feature 003 adds lossless GNOME capture and
-multi-monitor selection at 1x**:
+**MVP (Feature 002) is implemented**, **Feature 003 adds lossless GNOME capture and
+multi-monitor selection at 1x**, and **Feature 004 adds selection editing and annotations**:
 
 - `cosnip snip` captures the desktop, shows a full-screen selection overlay, and copies, saves, or
   pins the selected region.
@@ -21,14 +21,20 @@ multi-monitor selection at 1x**:
   `org.gnome.Shell.Screencast` H.264 path remains as an automatic, logged fallback.
 - Multi-monitor desktops are captured as one virtual desktop. Each monitor gets a fullscreen
   overlay, and a selection can cross monitor boundaries in global coordinates.
+- The selection has functional resize handles and can be moved before annotating.
+- Annotation tools: rectangle, ellipse, arrow, line, pencil, highlighter, text, number, mosaic,
+  blur, magnifier, and eraser. Undo/redo covers adding and erasing annotations.
+- Annotations are rasterized into copied, saved, and pinned output, including CJK text through
+  system-font fallback.
 - Large desktops and large pinned images are split into GL textures no larger than the driver limit
   (capped at 2048 per side), so 3840-pixel-wide layouts work on software/older GL stacks.
 - Pins are frameless override-redirect image windows with move, wheel zoom, and close.
 - Clipboard images survive process exit on GNOME via the shell clipboard manager (when it takes
   ownership).
 
-Still out of scope: annotations, tray, global hotkeys, settings UI, single-instance IPC, history,
-mixed/fractional per-monitor DPI, KDE/portal capture, OCR, and paste-from-clipboard.
+Still out of scope: post-commit annotation editing/moving/rotation, tray, global hotkeys, settings
+UI, single-instance IPC, history, mixed/fractional per-monitor DPI, KDE/portal capture, OCR, and
+paste-from-clipboard.
 
 ## Build
 
@@ -63,8 +69,10 @@ target/release/cosnip snip --full --copy
 target/release/cosnip --doctor
 ```
 
-Overlay keys: drag to select, arrows nudge, Shift keeps a square, Ctrl+A selects all,
-Enter/Ctrl+C copies, Ctrl+S saves, P pins, Escape cancels.
+Overlay keys: drag to select, drag inside to move, drag a handle to resize, arrows nudge, Shift
+keeps a square, Ctrl+A selects all, Ctrl+Z/Ctrl+Shift+Z undo/redo, Enter/Ctrl+C copies, Ctrl+S
+saves, P pins, Escape cancels the current tool or the overlay. Pick an annotation tool in the
+toolbar and draw inside the selection; right-click finishes/leaves the current tool.
 
 ## Platform support
 
@@ -95,7 +103,13 @@ simulated 960+960 layout).
 - Direct Mutter ScreenCast is GNOME-specific. Other Wayland desktops need the portal ScreenCast
   path, which is future work.
 - PipeWire development headers, libclang, and libLLVM are required at build time.
-- No annotations or text editing yet.
+- Annotations cannot be selected, moved, rotated, or re-edited after they are committed; use
+  undo/redo or the eraser. Text rotation and per-item style editing are deferred.
+- Text output is shaped with `cosmic-text` and the system font database. CJK text requires a CJK
+  font installed on the system; the overlay preview uses egui fonts and may differ slightly from
+  the rasterized output.
+- Mosaic/blur previews are block approximations; the saved/copied/pinned output uses the full
+  software effect.
 - No tray/global hotkeys yet; use a desktop shortcut that invokes `cosnip snip`.
 - Clipboard persistence depends on a desktop clipboard manager; on a bare X11 session without one,
   the image may disappear when the process exits.
@@ -108,8 +122,8 @@ simulated 960+960 layout).
 
 ```text
 crates/
-  cosnip-core/       pure geometry, selection, frame, output types
-  cosnip-imaging/    crop and PNG encode
+  cosnip-core/       pure geometry, selection handles, annotation model/history, output types
+  cosnip-imaging/    crop, PNG encode, software annotation rasterizer (cosmic-text)
   cosnip-capture/    X11, Mutter ScreenCast + PipeWire, GNOME Screencast fallback
   cosnip-platform/   clipboard, paths, atomic writes, pointer queries
   cosnip-ui/         eframe overlay and pin viewports

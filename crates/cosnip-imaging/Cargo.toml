@@ -4,9 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Image crop and encode primitives for Cosnip"
+description = "Image crop, encode, and annotation rasterization primitives for Cosnip"
 
 [dependencies]
+cosmic-text.workspace = true
 cosnip-core = { path = "../cosnip-core" }
 image.workspace = true
 thiserror.workspace = true

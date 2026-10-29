@@ -7,8 +7,9 @@
 **Status**: Implemented (MVP), verification in progress
 
 **Superseded in part**: Feature 003 replaces the GNOME Screencast H.264 path with a lossless
-Mutter ScreenCast + PipeWire backend and removes the single-monitor restriction. FR-017 and the
-single-monitor edge cases below describe the Feature 002 baseline, not current behavior.
+Mutter ScreenCast + PipeWire backend and removes the single-monitor restriction. Feature 004 adds
+selection resizing/moving and the annotation toolbar. FR-017 and the single-monitor/no-annotation
+edge cases below describe the Feature 002 baseline, not current behavior.
 
 **Input**: Capture the desktop, select a region, copy or save it, and pin the image on screen from
 an ARM64 Linux desktop. This is the first usable Cosnip milestone; annotations, tray, global

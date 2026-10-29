@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
-//! Image operations for the snip document.
-//!
-//! The MVP only needs exact crops and lossless PNG encoding; annotation rendering arrives in a
-//! later feature.
+//! Image operations for the snip document: crops, PNG encoding, and annotation rasterization.
 
 use std::io::Cursor;
 
 use cosnip_core::{Frame, Rect};
+
+mod annotate;
+
+pub use annotate::render;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImagingError {

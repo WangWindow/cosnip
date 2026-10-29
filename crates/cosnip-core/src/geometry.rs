@@ -137,6 +137,25 @@ impl Rect {
         );
         moved.clamp_to(bounds).unwrap_or(self)
     }
+
+    /// Grow the rectangle by `amount` on every side, saturating at the coordinate limits.
+    #[must_use]
+    pub fn expand(self, amount: i32) -> Self {
+        if amount <= 0 {
+            return self;
+        }
+        let amount = i64::from(amount);
+        let left = i64::from(self.x) - amount;
+        let top = i64::from(self.y) - amount;
+        let right = i64::from(self.right()) + amount;
+        let bottom = i64::from(self.bottom()) + amount;
+        Self::new(
+            i32::try_from(left).unwrap_or(i32::MIN),
+            i32::try_from(top).unwrap_or(i32::MIN),
+            u32::try_from(right - left).unwrap_or(u32::MAX),
+            u32::try_from(bottom - top).unwrap_or(u32::MAX),
+        )
+    }
 }
 
 #[cfg(test)]

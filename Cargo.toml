@@ -22,6 +22,7 @@ anyhow = "1"
 async-io = "2"
 arboard = "3"
 clap = { version = "4", features = ["derive"] }
+cosmic-text = "0.19"
 directories = "6"
 eframe = { version = "0.37", default-features = false, features = [
     "glow",
