@@ -84,7 +84,7 @@ later feature; `difference` means an accepted MVP difference.
 | BEH-016 pin interactions | partial | drag, wheel zoom, close; no rotate/flip/opacity |
 | BEH-017 native stacking | parity | native screencast shows pin above browser |
 | BEH-018..021 annotations | deferred | next feature |
-| BEH-022 image clipboard | parity | 500x300 read by native Wayland GTK4 after exit |
+| BEH-022 image clipboard | partial | 500x300 read by native Wayland GTK4 after exit; GNOME fallback pixels are lossy H.264 |
 | BEH-023 text/HTML/URI/color clipboard | deferred | later feature |
 | BEH-024..026 hotkeys | deferred | use a desktop shortcut invoking `cosnip snip` |
 | BEH-027..029 CLI | partial | `snip`, `--area`, `--full`, `--delay`, `--copy`, `--save`, `--pin`; other commands later |

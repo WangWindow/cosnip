@@ -107,5 +107,5 @@ DISPLAY=:99 XDG_SESSION_TYPE=x11 cargo test -p cosnip-capture --test x11_capture
 DISPLAY=:99 XDG_SESSION_TYPE=x11 cargo test -p cosnip-app --test xvfb_smoke -- --ignored
 ```
 
-Performance on the target (release): X11 capture ~12–35 ms; GNOME Screencast capture ~1.1–1.6 s;
+Performance on the target (release): X11 capture ~12–35 ms; GNOME Screencast capture ~1.1–1.7 s;
 overlay and pin are idle when not interacting.

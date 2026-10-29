@@ -36,7 +36,10 @@ without a `moov` atom. Use the default H.264 pipeline and decode one frame with 
 MVP. Use a unique runtime directory and clean it on every exit path.
 
 The GNOME Screencast output is H.264 MP4, 1920x1080, 30 fps in the tested environment. The
-recording indicator may appear briefly; this is an accepted MVP limitation.
+default encoder is lossy (the service uses a fixed QP); colors and fine text can differ slightly
+from the compositor. This is an accepted MVP limitation, not parity with an exact screenshot.
+The recording indicator may appear briefly. A PipeWire/Mutter ScreenCast backend is required for
+lossless pixels on Wayland.
 
 ### D-003 — Overlay window
 
@@ -101,6 +104,7 @@ annotation.
   the recording service is not available. Report a clear error; do not fall back to a black X11
   capture.
 - The recording indicator is a visible difference from a silent screenshot; document it.
+- H.264 fallback output is lossy; Xorg/PipeWire is required for exact color/pixel parity.
 - `ffmpeg` is an external runtime; `--doctor` must detect it and the packaging docs must list it.
 - The target's hardware GLX may not give alpha pins; the MVP's image-sized opaque pins are still
   functional but lack shadows/rounded corners.

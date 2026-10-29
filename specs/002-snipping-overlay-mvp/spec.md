@@ -167,7 +167,8 @@ failure, clipboard failure) and verify cleanup and exit codes.
   constrain to a square with Shift, select the full screen with Ctrl+A, confirm with Enter or
   Ctrl+C, and cancel with Escape.
 - **FR-007**: A confirmed selection MUST be copyable to the clipboard as an image, savable as a
-  PNG, or pinnable.
+  PNG, or pinnable. X11/Xorg output is pixel-exact; the GNOME Screencast fallback is decoded from
+  a lossy H.264 recording and therefore may have small color/compression differences.
 - **FR-008**: A clipboard copy MUST preserve the selected pixel dimensions and produce an image
   that at least one native Wayland application can read.
 - **FR-009**: Saving MUST be atomic: write to a temporary file in the destination directory, fsync
@@ -211,8 +212,9 @@ failure, clipboard failure) and verify cleanup and exit codes.
   in under 300 ms; a 500x300 selection copies in under 100 ms after confirmation.
 - **SC-002**: On the target GNOME 49 device, 95% of snips complete capture and show the overlay in
   under 2.0 s; failures are reported within 2.5 s.
-- **SC-003**: Clipboard and saved PNG dimensions/pixels match the selection in automated tests
-  (exact dimensions; pixel comparison with zero unexpected differences for lossless output).
+- **SC-003**: Clipboard and saved PNG dimensions match the selection in automated tests. X11/Xorg
+  output has zero unexpected pixel differences; GNOME fallback output is visually equivalent and
+  dimension-exact, with lossy-codec differences documented.
 - **SC-004**: A pinned image is visible above a native Wayland window and supports move, zoom, and
   close; no taskbar entry is present.
 - **SC-005**: After 20 successful and 20 failed snips, no temp recording/frame files remain and no
@@ -229,7 +231,8 @@ failure, clipboard failure) and verify cleanup and exit codes.
 - The first MVP targets a single 1920x1080 monitor at scale 1.0; the current device fits this.
 - Xorg is available for the fast path; GNOME 49 Wayland is the fallback path.
 - `ffmpeg` (or a decoder runtime) may be required for the GNOME Screencast fallback; it is
-  documented as an optional runtime dependency and is not bundled.
+  documented as an optional runtime dependency and is not bundled. The fallback is lossy H.264;
+  exact pixel parity is an Xorg/PipeWire requirement.
 - The user runs the binary directly or via a desktop shortcut; tray and global hotkeys are later.
 - Clipboard image exchange is verified with a GTK4 native Wayland reader; if the reverse direction
   is needed for paste, a native clipboard helper is a later feature.

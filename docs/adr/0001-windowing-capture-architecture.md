@@ -46,8 +46,9 @@ override-redirect ARGB pins on the target device. Evidence: OBS-016 through OBS-
 
 3. **Capture backend is a platform adapter, not a windowing detail.**
    - Xorg session: native X11/XShm-style capture.
-   - GNOME ≥41 Wayland: freedesktop portal Screenshot (or a future compositor-specific silent
-     path).
+   - GNOME ≥41 Wayland: freedesktop portal Screenshot (blocked in the tested GNOME 49 session);
+     the MVP uses GNOME Shell Screencast single-frame capture, which is lossy H.264. A
+     PipeWire/Mutter ScreenCast backend is the planned lossless path.
    - GNOME ≤40: GNOME Shell Screenshot D-Bus (reference behavior).
    - KDE: KWin ScreenShot2 with PipeWire.
    - XWayland root capture is explicitly unsupported and must not be used as a fallback for

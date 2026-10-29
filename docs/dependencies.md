@@ -46,8 +46,9 @@ The analysis tools are development-time instruments. They must not become runtim
 dependencies (Constitution II).
 
 `ffmpeg` is an external runtime dependency only for the GNOME 49 Screencast fallback. `--doctor`
-detects it; the binary does not bundle it. A future PipeWire/Mutter ScreenCast backend should
-remove this dependency.
+detects it; the binary does not bundle it. The default GNOME Screencast encoder is lossy H.264;
+use Xorg for pixel-exact capture, or the future PipeWire/Mutter ScreenCast backend. A future
+backend should remove the ffmpeg dependency.
 
 ## Rejected for This Device
 
