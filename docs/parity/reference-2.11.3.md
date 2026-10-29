@@ -95,7 +95,7 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | BEH-032 tray | deferred | no tray in MVP |
 | BEH-033 output | partial | PNG only; JPEG/WebP later |
 | BEH-034/035 hold semantics | difference | MVP always shows overlay; no `--hold` |
-| BEH-041 multi-monitor/DPI | partial | 1x multi-monitor implemented and simulated (200x50 cross-boundary drag); mixed/fractional DPI pending |
+| BEH-041 multi-monitor/DPI | parity | Mixed-scale dual-monitor capture via per-monitor `RecordMonitor` + XWayland-canvas composition; drags cross boundaries in both directions; pin geometry is point-correct at 2x. Native per-monitor output remains future work |
 | BEH-042 portal/pure Wayland | difference | direct Mutter ScreenCast on GNOME; portal and pure-Wayland UI not implemented |
 | BEH-045 pin shadow margin | difference | image-sized pin avoids black margin on depth-24 GL |
 
@@ -110,8 +110,10 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | Tiled pin | 3840x1080 pin window created on the same 2048-limit stack |
 | Cross-monitor drag | simulated 960+960 layout; 900→1100 drag saved 200x50 |
 | Pin after multi-monitor changes | 500x300 pin at (300,200); Escape closed it |
-| Real dual-monitor hardware | open; see tasks T057–T058 |
-| Mixed/fractional DPI | open; see tasks T059 |
+| Real dual-monitor hardware | validated on DP-2 4096x2304 at (0,0) + eDP-1 2880x1800 at (4096,338); overlays cover both monitors and focus follows the pointer |
+| Mixed/fractional DPI | validated: per-monitor frames 2560x1440 and 2880x1800 composed into a 6976x2304 XWayland canvas; documented common-canvas resampling |
+| Cross-boundary drag both ways | 4300,1000 → 4000,1100 and 4000,1000 → 4300,1100 both saved 300x100 |
+| HiDPI pin geometry | `--area 4000 1000 300 200 --pin` opened a 300x200 pin at (4000,1000) on the 2x XWayland desktop |
 
 ### Feature 004 Evidence
 

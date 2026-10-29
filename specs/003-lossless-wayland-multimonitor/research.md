@@ -169,3 +169,36 @@ exact 500x300 `--area` crop.
 3. Fractional scaling can make the raw stream larger than the RandR layout; the current uniform
    scale mapping is a best effort, not per-monitor DPI correction.
 4. Portal ScreenCast remains an option for non-GNOME or future permission-based capture.
+
+## 10. Mixed-scale dual-monitor validation and fix (2026-10-29)
+
+The validation desktop exposed two bugs that the simulated 1x layout could not:
+
+1. **Area stream content was clipped to the primary view.** The desktop was 4096x2304 at
+   compositor scale 1.25 plus 2880x1800 at scale 2.0. XWayland exposed a 6976x2304 root
+   (logical stage x 2). Calling `RecordArea(0, 0, 3488, 1152)` returned a 6976x2304 buffer, but
+   only the left 4096x2304 contained the primary monitor; the second monitor was black. Mutter's
+   area stream paints with the maximum overlapping stage-view scale and does not composite a
+   mixed-scale area correctly.
+2. **The area was requested in the wrong coordinate space.** The original code passed the
+   XWayland root size to `RecordArea`. Mutter expects logical stage coordinates, so the returned
+   buffer was 13952x4608 with the actual desktop packed into the top-left quarter.
+
+The fix records each RandR monitor with `RecordMonitor` in one session, scales each stream frame
+into its XWayland monitor rectangle, and composes a virtual-desktop frame. The area-stream path
+remains as a fallback using logical bounds from `org.gnome.Mutter.DisplayConfig.GetCurrentState`.
+Cross-monitor drags use `XQueryPointer` for the global position and guard the destination
+viewport against restarting the selection. Pin geometry uses viewport points rather than frame
+pixels.
+
+Evidence:
+
+| Check | Result |
+|---|---|
+| Full capture | 6976x2304, both monitor slices present |
+| Raw streams | 2560x1440 (DP-2), 2880x1800 (eDP-1) |
+| Compose | XWayland-canvas 6976x2304; DP-2 bilinearly resampled to 4096x2304 |
+| Cross drag right → left | 4300,1000 → 4000,1100 saved 300x100 |
+| Cross drag left → right | 4000,1000 → 4300,1100 saved 300x100 |
+| Pin | 300x200 at (4000,1000) on the 2x desktop |
+| Capture-to-frame | 344–520 ms in release builds |

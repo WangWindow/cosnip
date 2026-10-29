@@ -78,9 +78,30 @@ must be 200x50.
 
 ## Manual multi-monitor checklist
 
-- [ ] Each monitor is fully covered, including panels, with no gap or duplicate image.
-- [ ] A drag crosses the monitor boundary and continues smoothly.
-- [ ] The magnifier, size badge, and toolbar appear on the expected monitor.
-- [ ] Keyboard shortcuts work after moving the pointer to another monitor.
-- [ ] The saved/clipboard image contains the continuous region.
-- [ ] Mixed-DPI is treated as a known limitation.
+- [x] Each monitor is fully covered, including panels, with no gap or duplicate image.
+- [x] A drag crosses the monitor boundary and continues smoothly in both directions.
+- [x] The magnifier, size badge, and toolbar appear on the expected monitor.
+- [x] Keyboard shortcuts work after moving the pointer to another monitor.
+- [x] The saved/clipboard image contains the continuous region.
+- [x] Mixed-DPI is normalized into one XWayland-scale composited desktop frame.
+- [ ] Real-mouse pin interaction on a GNOME 49 XWayland session (synthetic XTest did not reach
+  non-fullscreen XWayland windows on the validation host).
+
+## Mixed-scale validation
+
+Validated on GNOME 49 with two monitors:
+
+```text
+monitor DP-2: 4096x2304 at 0,0    (compositor scale 1.25)
+monitor eDP-1: 2880x1800 at 4096,338 (compositor scale 2.0)
+XWayland desktop: 6976x2304
+```
+
+`cosnip --doctor` reports both monitors and `backend: gnome-pipewire`. `cosnip snip --full` saves
+a 6976x2304 PNG containing both monitor slices. A drag from (4300,1000) to (4000,1100) or from
+(4000,1000) to (4300,1100) saves exactly 300x100. A 300x200 `--area` pin at (4000,1000) opens at
+(4000,1000) with a 300x200 window.
+
+The raw stream sizes were 2560x1440 for DP-2 and 2880x1800 for eDP-1; Cosnip scales each into its
+XWayland monitor rectangle and composes them. This is why the saved frame is a 2x logical canvas
+rather than a native-per-monitor mosaic.

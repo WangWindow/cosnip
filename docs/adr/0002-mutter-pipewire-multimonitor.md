@@ -1,7 +1,6 @@
 # ADR 0002: Mutter ScreenCast + PipeWire Capture and Per-Monitor Overlays
 
-- **Status**: Accepted (implementation verified on single monitor; hardware multi-monitor
-  validation pending)
+- **Status**: Accepted (validated on mixed-scale dual-monitor GNOME 49 hardware)
 - **Date**: 2026-10-29
 - **Feature**: `003-lossless-wayland-multimonitor`
 - **Deciders**: Project owner, implementation team
@@ -61,10 +60,43 @@ without losing keyboard focus.
    - This avoids `Texture "capture" has size 3840x1080, but the maximum texture side is 2048` on
      software/older GL stacks.
 
-7. **Scope this feature to uniform scale 1.0.**
+7. **Start with uniform scale 1.0 (superseded by the mixed-scale addendum below).**
    - Layout rectangles are normalized and uniformly scaled into the captured frame, which covers a
      frame larger than the logical layout.
    - Mixed per-monitor DPI, transform correction, and monitor hot-plug remain open.
+
+## Addendum: Mixed-Scale Capture (2026-10-29)
+
+Hardware validation on a two-monitor layout exposed a Mutter limitation not visible in the
+simulated 1x tests:
+
+- The desktop mixed a 4096x2304 monitor at compositor scale 1.25 with a 2880x1800 monitor at scale
+  2.0. XWayland exposed a 6976x2304 root (logical stage x 2).
+- `RecordArea(0, 0, logical_width, logical_height)` returned a 6976x2304 frame, but only the
+  primary stage view contained pixels; the second monitor was black. The area stream paints with
+  the maximum overlapping view scale and does not composite a mixed-scale area correctly.
+- Passing the XWayland root size to `RecordArea` was also wrong: Mutter expects logical stage
+  coordinates, so the returned frame was 13952x4608 with the desktop packed into the top-left
+  quarter.
+
+The implementation now:
+
+1. Reads the RandR monitor connectors and records each monitor with `RecordMonitor` in one Mutter
+   session, collecting all PipeWire nodes before `Start`.
+2. Scales each monitor frame into its XWayland monitor rectangle and composes one virtual-desktop
+   frame. Uniform-scale layouts hit the identity path; mixed-scale monitors are bilinearly
+   resampled into the common canvas.
+3. Keeps the full-stage `RecordArea` as a fallback, using logical stage bounds from
+   `org.gnome.Mutter.DisplayConfig.GetCurrentState`, then falls back to H.264.
+4. Uses the global X11 pointer during overlay drags so a selection continues across monitor
+   boundaries in either direction, and guards against a synthetic press in the destination
+   viewport restarting the selection.
+5. Converts pin coordinates, texture rectangles, zoom size, and drag deltas from frame pixels to
+   viewport points, fixing pins that previously opened at double coordinates on 2x XWayland.
+
+The common-canvas composition is a deliberate tradeoff: a monitor below the global XWayland scale
+is upsampled, so saved pixels are not native for that monitor. True per-monitor native-resolution
+composition remains future work.
 
 ## Alternatives Considered
 
@@ -93,12 +125,14 @@ without losing keyboard focus.
 
 - Direct Mutter ScreenCast is GNOME-specific and may change; the adapter and fallback contain the
   risk.
-- Multiple fullscreen viewports and focus transfer have not been validated on real dual-monitor
-  hardware.
-- Mixed/fractional DPI can misalign the raw frame and overlay coordinates.
+- Multiple fullscreen viewports and focus transfer are validated on the mixed-scale test desktop;
+  other compositor/WM combinations remain to be checked.
+- Mixed-scale layouts use per-monitor streams and a common XWayland-scale canvas. A monitor below
+  the global XWayland scale is upsampled, so native per-monitor output is still future work.
 - PipeWire development headers, libclang, and libLLVM are required at build time.
-- Multi-monitor layouts whose primary monitor has a non-zero/negative origin need verification
-  against Mutter's stage coordinates.
+- Multi-monitor layouts whose primary monitor has a non-zero/negative origin still need a separate
+  hardware configuration; the validated desktop has its primary at (0,0) and a non-zero secondary
+  origin.
 
 ## Fallbacks
 
@@ -106,7 +140,8 @@ without losing keyboard focus.
 2. **Both GNOME paths unavailable** → actionable error; use Xorg for pixel-exact capture.
 3. **Focus transfer fails on real hardware** → fall back to a single active-monitor overlay and
    document the limitation.
-4. **Mixed-DPI misalignment** → constrain the feature to 1x until a per-monitor correction lands.
+4. **Mixed-scale area-stream misalignment** → per-monitor `RecordMonitor` streams composed in
+   XWayland coordinates; a common-canvas resampling limitation is documented.
 
 ## Evidence
 
@@ -116,3 +151,7 @@ without losing keyboard focus.
 - Product: 142–412 ms, full-screen PNG visually correct, `--doctor` reports `gnome-pipewire`.
 - Xvfb: 3840x1080 with 2048 texture limit, exact `--area` crop.
 - Simulated dual monitor: drag 900,500 → 1100,550 saved 200x50.
+- Real mixed-scale dual monitor: DP-2 4096x2304 at (0,0), eDP-1 2880x1800 at (4096,338),
+  XWayland desktop 6976x2304. Full capture saved 6976x2304 with both slices; 300x100 drags
+  across the boundary saved in both directions; pin at (4000,1000) opened 300x200 at the right
+  position. Capture-to-frame was 344–520 ms in release builds.

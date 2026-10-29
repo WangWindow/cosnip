@@ -334,6 +334,7 @@ impl CosnipApp {
     fn pin_image(&mut self, ctx: &egui::Context, image: Frame, rect: Rect) -> Result<(), String> {
         let mut tiles = Vec::new();
         let max_side = texture_tile_size(ctx);
+        let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
         for y in (0..image.height()).step_by(max_side as usize) {
             for x in (0..image.width()).step_by(max_side as usize) {
                 let width = max_side.min(image.width() - x);
@@ -355,14 +356,15 @@ impl CosnipApp {
                 });
             }
         }
+        let position = pin_position(rect, pixels_per_point);
         self.pin = Some(Pin {
             frame: image,
             tiles,
-            position: (rect.x as f32, rect.y as f32),
+            position,
             scale: 1.0,
             viewport: ViewportId::from_hash_of(PIN_ID),
             drag_start_global: None,
-            drag_start_position: (rect.x as f32, rect.y as f32),
+            drag_start_position: position,
             dragging: false,
         });
         self.outcome.lock().unwrap().pinned = true;
@@ -485,7 +487,7 @@ impl CosnipApp {
                 if !over_chrome {
                     self.commit_text_editor();
                 }
-            } else if !over_chrome {
+            } else if !over_chrome && self.drag_mode.is_none() {
                 self.begin_pointer_action(p, monitor.index);
             }
         }
@@ -498,14 +500,20 @@ impl CosnipApp {
             self.begin_pointer_action(p, monitor.index);
         }
         let is_drag_monitor = self.drag_monitor == Some(monitor.index);
-        if let Some(current) = pointer_global
-            && is_drag_monitor
-            && (response.dragged() || ctx.input(|i| i.pointer.primary_down()))
-        {
-            let square = ctx.input(|i| i.modifiers.shift);
-            self.update_drag(current, square, bounds);
+        if self.drag_mode.is_some() {
+            let current = global_pointer()
+                .map(|(x, y)| Point::new(x, y))
+                .or(pointer_global);
+            if let Some(current) = current
+                && (is_drag_monitor || pointer_inside)
+            {
+                let square = ctx.input(|i| i.modifiers.shift);
+                self.update_drag(current, square, bounds);
+            }
         }
-        if is_drag_monitor && (response.drag_stopped() || ctx.input(|i| i.pointer.any_released())) {
+        if self.drag_mode.is_some()
+            && (response.drag_stopped() || ctx.input(|i| i.pointer.any_released()))
+        {
             self.finish_drag();
         }
         if ctx.input(|i| i.pointer.secondary_pressed()) && response.hovered() && !over_chrome {
@@ -1357,7 +1365,11 @@ impl CosnipApp {
 
     fn show_pin(&mut self, ctx: &egui::Context) {
         let Some(pin) = self.pin.as_mut() else { return };
-        let base = egui::vec2(pin.frame.width() as f32, pin.frame.height() as f32);
+        let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
+        let base = egui::vec2(
+            pin.frame.width() as f32 / pixels_per_point,
+            pin.frame.height() as f32 / pixels_per_point,
+        );
         let size = base * pin.scale;
         let builder = egui::ViewportBuilder::default()
             .with_title("Cosnip Pin")
@@ -1374,10 +1386,13 @@ impl CosnipApp {
             .tiles
             .iter()
             .map(|tile| {
-                let min = egui::pos2(tile.x as f32 * pin.scale, tile.y as f32 * pin.scale);
+                let min = egui::pos2(
+                    tile.x as f32 * pin.scale / pixels_per_point,
+                    tile.y as f32 * pin.scale / pixels_per_point,
+                );
                 let max = egui::pos2(
-                    (tile.x + tile.width as i32) as f32 * pin.scale,
-                    (tile.y + tile.height as i32) as f32 * pin.scale,
+                    (tile.x + tile.width as i32) as f32 * pin.scale / pixels_per_point,
+                    (tile.y + tile.height as i32) as f32 * pin.scale / pixels_per_point,
                 );
                 (tile.texture.id(), egui::Rect::from_min_max(min, max))
             })
@@ -1402,20 +1417,15 @@ impl CosnipApp {
             if response.drag_started()
                 && let Some(current) = global_pointer()
             {
-                let delta = ctx.input(|i| i.pointer.delta());
-                let start = (
-                    current.0 - delta.x.round() as i32,
-                    current.1 - delta.y.round() as i32,
-                );
-                pin.drag_start_global = Some(start);
+                pin.drag_start_global = Some(current);
                 pin.drag_start_position = new_position;
                 pin.dragging = true;
             }
             if pin.dragging {
                 if let (Some(start), Some(current)) = (pin.drag_start_global, global_pointer()) {
                     new_position = (
-                        pin.drag_start_position.0 + (current.0 - start.0) as f32,
-                        pin.drag_start_position.1 + (current.1 - start.1) as f32,
+                        pin.drag_start_position.0 + (current.0 - start.0) as f32 / pixels_per_point,
+                        pin.drag_start_position.1 + (current.1 - start.1) as f32 / pixels_per_point,
                     );
                     ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(
                         new_position.0,
@@ -1493,8 +1503,12 @@ impl eframe::App for CosnipApp {
         }
         if self.overlay_open {
             self.show_overlay(ctx);
-            if self.drag_mode.is_some() && !primary_button_down() {
-                self.finish_drag();
+            if self.drag_mode.is_some() {
+                if primary_button_down() {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(8));
+                } else {
+                    self.finish_drag();
+                }
             }
         }
         if self.pin.is_some() {
@@ -1520,6 +1534,11 @@ impl eframe::App for CosnipApp {
 
 fn texture_tile_size(ctx: &egui::Context) -> u32 {
     ctx.input(|i| i.max_texture_side).clamp(64, 2048) as u32
+}
+
+fn pin_position(rect: Rect, pixels_per_point: f32) -> (f32, f32) {
+    let scale = pixels_per_point.max(f32::EPSILON);
+    (rect.x as f32 / scale, rect.y as f32 / scale)
 }
 
 #[cfg(debug_assertions)]
@@ -1843,9 +1862,21 @@ fn draw_size_badge(ui: &mut egui::Ui, selection: egui::Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_monitors, selection_center_monitor};
+    use super::{fit_monitors, pin_position, selection_center_monitor};
     use cosnip_capture::MonitorInfo;
     use cosnip_core::Rect;
+
+    #[test]
+    fn pin_position_converts_frame_pixels_to_points() {
+        assert_eq!(
+            pin_position(Rect::new(4000, 1000, 300, 200), 2.0),
+            (2000.0, 500.0)
+        );
+        assert_eq!(
+            pin_position(Rect::new(300, 200, 50, 50), 1.0),
+            (300.0, 200.0)
+        );
+    }
 
     fn monitor(x: i32, y: i32, width: u32, height: u32) -> MonitorInfo {
         MonitorInfo {

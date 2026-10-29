@@ -57,11 +57,36 @@ Legend: `[x]` complete, `[ ]` pending. Hardware and mixed-DPI items are explicit
   without a texture panic.
 - [x] T055 Run `cargo fmt`, `cargo clippy -- -D warnings`, and the workspace tests.
 - [x] T056 Update README, dependency record, parity matrix, ADR, and Feature 002 supersession note.
-- [ ] T057 Validate on real dual-monitor GNOME hardware (focus, placement, cross-screen drag).
-- [ ] T058 Validate a layout where the primary monitor is not at (0,0) against Mutter's
-  `RecordArea` coordinates.
-- [ ] T059 Validate fractional/mixed-DPI behavior or add a clear runtime limitation message.
-- [ ] T060 Validate x86_64 release build with PipeWire development packages.
+- [x] T057 Validate on real dual-monitor GNOME hardware (focus, placement, cross-screen drag).
+  Verified on DP-2 4096x2304 at (0,0) and eDP-1 2880x1800 at (4096,338); both overlay viewports
+  cover their monitor, keyboard works after moving focus, and drags cross the boundary in both
+  directions (300x100 saved).
+- [x] T058 Validate a layout where the primary monitor is not at (0,0) against Mutter's
+  `RecordArea` coordinates. The secondary monitor starts at (4096,338) and its per-monitor stream
+  and overlay map correctly; logical stage bounds are read from Mutter DisplayConfig for the area
+  fallback. A primary with a negative origin still needs a separate hardware configuration.
+- [x] T059 Validate fractional/mixed-DPI behavior or add a clear runtime limitation message.
+  Per-monitor `RecordMonitor` avoids Mutter's mixed-scale area-stream painting bug; frames are
+  composed into the XWayland desktop canvas. The common-canvas resampling limitation is documented.
+- [x] T060 Validate x86_64 release build with PipeWire development packages. Built and exercised
+  the GNOME 49 PipeWire backend on x86_64.
+
+## Fix 003a — mixed-scale and cross-monitor regressions
+
+- [x] T061 Reproduce the mixed-scale capture bug: the full-area stream returned a 13952x4608 frame
+  whose right half was black because `RecordArea` was called with the XWayland root size instead of
+  Mutter's logical stage size.
+- [x] T062 Capture each monitor with `RecordMonitor`, scale the raw frame into its XWayland monitor
+  rectangle, and compose one virtual-desktop frame.
+- [x] T063 Keep the full-stage `RecordArea` as a fallback using DisplayConfig logical bounds, then
+  fall back to H.264.
+- [x] T064 Reproduce and fix cross-monitor drags: use the global pointer during drags and do not
+  restart a selection when the pointer enters the destination viewport.
+- [x] T065 Fix HiDPI pin geometry, texture placement, zoom, and drag deltas by converting frame
+  pixels to viewport points.
+- [x] T066 Add bilinear `Frame::scaled`/`Frame::blit` with unit tests.
+- [x] T067 Re-run fmt, clippy, workspace tests, full capture, both drag directions, and pin
+  geometry on the mixed-scale desktop.
 
 ## Open follow-ups
 

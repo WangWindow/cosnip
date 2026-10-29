@@ -12,15 +12,18 @@ assets; it does not ship or copy reference code, strings, or resources. See
 **M0 reference analysis** is complete and accepted (Feature 001).
 
 **MVP (Feature 002) is implemented**, **Feature 003 adds lossless GNOME capture and
-multi-monitor selection at 1x**, and **Feature 004 adds selection editing and annotations**:
+multi-monitor selection**, and **Feature 004 adds selection editing and annotations**:
 
 - `cosnip snip` captures the desktop, shows a full-screen selection overlay, and copies, saves, or
   pins the selected region.
 - X11/Xorg capture uses native X11.
 - GNOME 49 Wayland uses **Mutter ScreenCast + PipeWire raw BGRx frames** (lossless). The old
   `org.gnome.Shell.Screencast` H.264 path remains as an automatic, logged fallback.
-- Multi-monitor desktops are captured as one virtual desktop. Each monitor gets a fullscreen
-  overlay, and a selection can cross monitor boundaries in global coordinates.
+- Multi-monitor desktops are captured as one virtual desktop. When monitors use different
+  compositor scales, each monitor is recorded with its own Mutter stream and composed into the
+  XWayland desktop coordinate space; a single full-area stream is kept as a fallback.
+  Each monitor gets a fullscreen overlay, and a selection can cross monitor boundaries in global
+  coordinates in either direction.
 - The selection has functional resize handles and can be moved before annotating.
 - Annotation tools: rectangle, ellipse, arrow, line, pencil, highlighter, text, number, mosaic,
   blur, magnifier, and eraser, in a compact Snipaste-style icon toolbar with hover tooltips.
@@ -29,13 +32,15 @@ multi-monitor selection at 1x**, and **Feature 004 adds selection editing and an
   system-font fallback.
 - Large desktops and large pinned images are split into GL textures no larger than the driver limit
   (capped at 2048 per side), so 3840-pixel-wide layouts work on software/older GL stacks.
-- Pins are frameless override-redirect image windows with move, wheel zoom, and close.
+- Pins are frameless override-redirect image windows with move, wheel zoom, and close. Pin
+  geometry, tiles, zoom, and drag deltas are expressed in the viewport's logical points, so a
+  2x HiDPI desktop places the pin at the selected rectangle instead of at double coordinates.
 - Clipboard images survive process exit on GNOME via the shell clipboard manager (when it takes
   ownership).
 
 Still out of scope: post-commit annotation editing/moving/rotation, tray, global hotkeys, settings
-UI, single-instance IPC, history, mixed/fractional per-monitor DPI, KDE/portal capture, OCR, and
-paste-from-clipboard.
+UI, single-instance IPC, history, per-monitor native-resolution output, KDE/portal capture, OCR,
+and paste-from-clipboard.
 
 ## Build
 
@@ -76,12 +81,16 @@ saves, P pins, Escape cancels the current tool or the overlay. The toolbar is ic
 icon for its name and hint. Persistent keyboard tips are intentionally not shown. Pick an annotation
 tool and draw inside the selection; right-click finishes/leaves the current tool.
 
+`--area` coordinates are captured-frame pixels. On GNOME HiDPI sessions that is the XWayland
+desktop coordinate space (for example 6976x2304 on the validated 2x layout), not compositor
+logical points.
+
 ## Platform support
 
 | Session | Backend | Status |
 |---|---|---|
 | X11/Xorg | native X11 `GetImage` | supported; pixel-exact |
-| GNOME 49 Wayland + XWayland | Mutter ScreenCast + PipeWire raw frames | supported; lossless, ~0.26–0.42 s |
+| GNOME 49 Wayland + XWayland | Mutter ScreenCast + PipeWire raw frames | supported; lossless, ~0.14–0.52 s depending on monitor count/scale |
 | GNOME Wayland without PipeWire | GNOME Shell Screencast H.264 | automatic fallback; lossy, ~1.1–1.7 s |
 | Other Wayland | — | unsupported in this MVP |
 | XWayland root capture | — | not used; cannot see native Wayland surfaces |
@@ -90,18 +99,24 @@ tool and draw inside the selection; right-click finishes/leaves the current tool
 uses the same compositor stream as GNOME's recorder but reads raw `video/x-raw` buffers instead of
 encoding H.264; no temporary video is written.
 
-Multi-monitor is supported for a uniform scale of 1.0. Each monitor is covered by its own
-fullscreen overlay; selection, magnifier, toolbar, and output use global desktop coordinates.
-Real dual-monitor hardware validation is still pending (the implementation was verified with a
-simulated 960+960 layout).
+Multi-monitor is supported for uniform and mixed compositor scales. Cosnip captures every monitor
+with `RecordMonitor` and composes the frames into the XWayland desktop coordinate space. This
+avoids a Mutter area-stream limitation where a mixed-scale area can paint only the primary stage
+view. The composited frame is the XWayland desktop resolution: monitors whose compositor scale is
+below the XWayland scale are resampled up, and true per-monitor native-resolution output is not
+implemented. Validated on a two-monitor GNOME 49 desktop (4096x2304 at 1.25 compositor scale plus
+2880x1800 at 2.0 scale, XWayland desktop 6976x2304), including cross-boundary drags in both
+directions and HiDPI pin placement.
 
 ## Limitations
 
-- Multi-monitor is supported at uniform scale 1.0. Mixed/fractional per-monitor DPI and monitor
-  transform correction are not yet implemented; a raw frame larger than the logical layout is
-  mapped with a uniform scale as a best effort.
-- Real dual-monitor hardware has not been available for validation; the per-monitor overlay,
-  focus transfer, and cross-screen drag were verified with a simulated layout.
+- The composited frame uses the XWayland desktop resolution. On a mixed-scale layout, a monitor
+  whose compositor scale is lower than the global XWayland scale is bilinearly resampled into that
+  canvas; saved and copied pixels are therefore not that monitor's native pixels. True per-monitor
+  native-resolution composition is future work.
+- The per-monitor path requires Mutter connector names from RandR. If they are unavailable,
+  Cosnip falls back to a full-stage area stream, which can paint only the primary view on
+  mixed-scale layouts, then to the H.264 fallback.
 - Direct Mutter ScreenCast is GNOME-specific. Other Wayland desktops need the portal ScreenCast
   path, which is future work.
 - PipeWire development headers, libclang, and libLLVM are required at build time.
@@ -118,6 +133,10 @@ simulated 960+960 layout).
   the image may disappear when the process exits.
 - Pins are opaque image-sized windows on GL configurations without alpha; shadows/rounded
   transparency are deferred.
+- Pin pointer interaction on a real GNOME 49 XWayland session was not validated with synthetic
+  input because XTest events do not reach non-fullscreen XWayland windows on the validation host.
+  Pin widget geometry and rendering were verified; real-mouse interaction still needs manual
+  confirmation.
 - The H.264 fallback may briefly show the desktop recording indicator and is used only when the
   lossless path fails.
 
@@ -161,5 +180,6 @@ target/debug/cosnip snip --save /tmp/drag.png --no-copy
 Drag across the 960-pixel boundary with an XTest tool; a 900→1100 horizontal drag saves 200 px.
 
 Performance on the target (debug build): X11 capture ~0.5 s at 3840x1080, ~12–35 ms at 1080p;
-GNOME Mutter/PipeWire capture-to-overlay 142–412 ms at 1920x1080; H.264 fallback ~1.1–1.7 s.
+GNOME Mutter/PipeWire capture-to-overlay 142–412 ms at 1920x1080 (release mixed-scale dual
+monitor 343–520 ms for a 6976x2304 desktop); H.264 fallback ~1.1–1.7 s.
 Overlay and pin are idle when not interacting.

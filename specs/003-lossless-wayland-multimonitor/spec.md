@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-29
 
-**Status**: Implemented for 1x layouts; hardware dual-monitor validation pending
+**Status**: Implemented; validated on mixed-scale dual-monitor GNOME 49 hardware
 
 **Input**: Replace the lossy GNOME Shell Screencast H.264 fallback with a lossless Mutter
 ScreenCast + PipeWire path, and make region selection span the whole virtual desktop the way
@@ -17,7 +17,7 @@ from `org.gnome.Shell.Screencast`, which encodes H.264. The decoded image is vis
 not pixel-exact. Feature 002 also rejected every layout with more than one monitor.
 
 The reference product selects across all monitors in one continuous frozen desktop. Cosnip must
-match that behavior on X11/Xorg and on GNOME Wayland + XWayland, at scale 1.0 first.
+match that behavior on X11/Xorg and on GNOME Wayland + XWayland, including mixed compositor scales.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -129,8 +129,8 @@ crop.
   memory.
 - The PipeWire signal arrives after the timeout: close the session and fall back.
 - A frame has stride padding: use the stride for row addressing and validate the mapped length.
-- A frame is larger than the logical monitor layout (fractional scaling): scale the layout into the
-  frame; mixed per-monitor DPI remains a known limitation.
+- A frame is larger than the logical monitor layout: scale each monitor frame into the XWayland
+  desktop rectangle; mixed per-monitor native-resolution output remains a known limitation.
 - Maximum texture size below monitor size: tile within the monitor.
 
 ## Requirements *(mandatory)*
@@ -164,8 +164,10 @@ crop.
 - **FR-013**: The fallback path MUST remain available, log that it is lossy, and preserve all
   Feature 002 outputs.
 - **FR-014**: `--doctor` MUST list the detected backend and every monitor geometry.
-- **FR-015**: Mixed per-monitor DPI and fractional scaling MAY be approximate in this feature; the
-  supported baseline is uniform scale 1.0.
+- **FR-015**: Mixed per-monitor scale layouts MUST be supported by capturing each monitor
+  separately and composing into a common XWayland desktop canvas. The composition MAY resample
+  monitors whose compositor scale is below the global XWayland scale; true per-monitor
+  native-resolution output is out of scope.
 - **FR-016**: No `unsafe` code, new network access, telemetry, or reference assets may be added.
 
 ### Key Entities
@@ -191,7 +193,9 @@ crop.
 
 ## Out of Scope
 
-- Mixed per-monitor fractional scaling and per-monitor transform correction.
+- Per-monitor native-resolution output (the current composition uses a common XWayland-scale
+  canvas).
+- Per-monitor transform correction beyond what Mutter reports for the logical layout.
 - The xdg-desktop-portal ScreenCast permission flow and restore tokens.
 - KDE/KWin capture.
 - Monitor hot-plug handling while the overlay is open.

@@ -102,7 +102,7 @@ impl CaptureBackend for GnomeScreencast {
             )));
         }
 
-        let (width, height) = screen_dimensions(&file)?;
+        let (width, height) = video_dimensions(&file)?;
         let output = std::process::Command::new("ffmpeg")
             .args([
                 "-v",
@@ -126,17 +126,23 @@ impl CaptureBackend for GnomeScreencast {
         }
         let frame = Frame::new(width, height, output.stdout)
             .map_err(|e| CaptureError::InvalidFrame(e.to_string()))?;
-        Ok(frame)
+        normalize_frame(frame)
     }
 }
 
-fn screen_dimensions(path: &Path) -> Result<(u32, u32), CaptureError> {
-    if let Ok(info) = crate::screen_info()
-        && info.width > 0
-        && info.height > 0
-    {
-        return Ok((info.width, info.height));
+/// Fit the recorded frame into the XWayland desktop space used by the overlay.
+fn normalize_frame(frame: Frame) -> Result<Frame, CaptureError> {
+    let info = crate::screen_info()?;
+    if frame.width() == info.width && frame.height() == info.height {
+        Ok(frame)
+    } else {
+        frame
+            .scaled(info.width, info.height)
+            .map_err(|e| CaptureError::InvalidFrame(e.to_string()))
     }
+}
+
+fn video_dimensions(path: &Path) -> Result<(u32, u32), CaptureError> {
     let output = std::process::Command::new("ffprobe")
         .args([
             "-v",
