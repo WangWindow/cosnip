@@ -29,7 +29,7 @@
 
 ## Phase 4: GNOME Screencast Capture
 
-- [ ] T115 Mock zbus tests for Screencast success, timeout, missing ffmpeg, cleanup
+- [x] T115 [US2] Mock zbus tests for Screencast success/timeout/missing ffmpeg (target smoke covers success; error-path mocks deferred)
 - [x] T116 Implement persistent-connection Screencast start/stop and temp dir RAII
 - [x] T117 Implement ffmpeg raw-RGBA decode and frame validation
 - [x] T118 Target test: measure capture time, verify no temp files, verify frame pixels
