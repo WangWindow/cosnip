@@ -74,13 +74,27 @@ are UI-only.
 
 Verified: saved PNG contains the red rectangle but no blue selection border/handles.
 
-## 7. Evidence
+## 7. Icon toolbar and tips
+
+The text-label toolbar was replaced with a compact single-row icon panel:
+
+- Original 24-unit line icons are drawn with egui primitives (`icons.rs`); no reference assets.
+- Active tool: blue fill/white icon; hover: subtle light fill; disabled undo/redo: dimmed.
+- Palette uses rounded swatches with a white selection ring; stroke widths use line glyphs.
+- Every icon has a two-line tooltip (name + hint).
+- Persistent bottom-left tips were removed by design; README/`--help` remain the shortcut
+  reference.
+
+Verified on Xvfb: the 760-pixel panel fits below a 700-pixel selection, the Rect tooltip appears on
+hover, the Rect icon selects the tool, and the Save icon writes the annotated PNG.
+
+## 8. Evidence
 
 | Check | Result |
 |---|---|
 | Core tests | 19 pass |
 | Imaging tests | 10 pass |
-| UI layout tests | 5 pass |
+| UI tests | 6 pass (layout + all icons draw) |
 | Rectangle | UI + output correct |
 | Ellipse + arrow | UI + output correct |
 | Text "Hello" | inline editor + output text |

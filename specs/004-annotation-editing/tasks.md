@@ -39,8 +39,9 @@ Legend: `[x]` complete, `[ ]` pending.
 - [x] T034 Add Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y.
 - [x] T035 Clip preview annotations to the selection.
 - [x] T036 Exclude toolbar/editor clicks from canvas actions.
-- [x] T037 Update tips and keyboard hints.
-- [x] T038 Verify output contains no overlay chrome.
+- [x] T037 Replace persistent tips with tooltips; keyboard reference stays in README.
+- [x] T038 Original line icon set, single-row icon toolbar, active/hover/tooltip states.
+- [x] T039 Verify output contains no overlay chrome.
 
 ## Phase 5 — Verification and docs
 

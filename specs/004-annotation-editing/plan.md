@@ -50,8 +50,16 @@ clamped to the frame with a minimum 4 px size.
 
 - egui painter draws shapes, text, numbers, block mosaics/blurs, and a cell-based magnifier.
 - Preview is clipped to the selection; overlay chrome is never part of the model.
-- The toolbar is one Area in the monitor containing the selection center, clamped to the screen.
 - Pointer input over the toolbar/editor is excluded with `Context::is_pointer_over_egui`.
+
+**Toolbar**:
+
+- One compact single-row icon panel with a dark translucent rounded background.
+- Original line icons drawn with egui primitives in `icons.rs`; no copied raster assets.
+- Groups: tools, palette, stroke widths, undo/redo, Copy/Save/Pin/Cancel.
+- Active tool gets a blue fill; hover gets a subtle light fill; every button has a tooltip.
+- Palette swatches are rounded squares with a selection ring; stroke widths are glyph icons.
+- Persistent bottom-left tips are removed; shortcuts remain in README/`--help`.
 
 **Output**:
 
@@ -67,7 +75,7 @@ clamped to the frame with a minimum 4 px size.
 - Core: 19 tests including annotations, undo/redo, erase, handle hit-test, resize, move.
 - Imaging: 10 tests including BGRx, rectangle clipping, mosaic, blur, text, CJK fallback,
   magnifier.
-- UI: 5 layout tests; manual Xvfb annotation flows.
+- UI: 6 tests including monitor layout and icon drawing; manual Xvfb annotation flows.
 - Xvfb: annotated save and pin smoke.
 
 ## Constitution Check

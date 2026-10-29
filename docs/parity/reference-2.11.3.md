@@ -75,8 +75,8 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | BEH-006/011 overlay/coverage/focus | parity | One fullscreen viewport per monitor; global selection coordinates |
 | BEH-007 selection/badge/handles | parity | Drag, arrows, square, Ctrl+A, move, and eight functional resize handles |
 | BEH-008 magnifier/color | partial | 11x11 magnifier, coordinates, RGB/HEX; no C/Shift color-copy shortcuts |
-| BEH-009 keyboard tips | partial | overlay tips panel includes tools/undo/right-click; no window/element detection |
-| BEH-010 toolbar | partial | combined annotation + Copy/Save/Pin/Cancel toolbar; no separate style panel |
+| BEH-009 keyboard tips | difference | persistent bottom-left tips intentionally absent; icon tooltips expose names/hints |
+| BEH-010 toolbar | partial | compact single-row icon toolbar (original line icons), palette/widths/undo/redo/output actions |
 | BEH-012 override overlay | difference | WM-managed fullscreen used for focus |
 | BEH-013 pin flags | parity | override-redirect, depth 32, Utility, skip taskbar/pager |
 | BEH-014 ARGB/shadow | partial | depth 32; opaque image-sized pin, no shadow/opacity |
@@ -128,5 +128,7 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | Eraser | unit test removes the topmost annotation and is undoable |
 | Undo/redo | toolbar Undo removed the newest rectangle; Ctrl+Z works with a held modifier |
 | Output isolation | saved PNG contains annotations but no selection border, handles, toolbar, or tips |
+| Icon toolbar | Xvfb screenshot shows original line icons, blue active tool, hover fill/tooltip |
+| Persistent tips | absent by design; README/--help carry the shortcut reference |
 | Pin | 700x450 pin at (200,150) shows the annotated rectangle |
 | IME on real GNOME | open; requires an interactive IME session |

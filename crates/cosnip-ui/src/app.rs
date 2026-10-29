@@ -25,6 +25,8 @@ use egui::{
 };
 use winit::platform::x11::EventLoopBuilderExtX11;
 
+use crate::icons::{self, Icon};
+
 const PIN_ID: &str = "cosnip-pin";
 
 #[derive(Clone, Debug)]
@@ -96,6 +98,7 @@ const PALETTE: [[u8; 4]; 7] = [
     [0, 0, 0, 255],
 ];
 const WIDTHS: [u32; 3] = [1, 3, 6];
+const COLOR_NAMES: [&str; 7] = ["Red", "Amber", "Green", "Blue", "Purple", "White", "Black"];
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outcome {
@@ -152,7 +155,6 @@ struct CosnipApp {
     monitors: Vec<OverlayMonitor>,
     focused_monitor: Option<usize>,
     cursor_hidden: Vec<bool>,
-    pointer_monitor: Option<usize>,
     drag_anchor: Option<Point>,
     drag_monitor: Option<usize>,
     drag_mode: Option<DragMode>,
@@ -220,7 +222,6 @@ impl CosnipApp {
             monitors,
             focused_monitor: None,
             cursor_hidden,
-            pointer_monitor: None,
             drag_anchor: None,
             drag_monitor: None,
             drag_mode: None,
@@ -457,9 +458,6 @@ impl CosnipApp {
         let hover = ctx.input(|i| i.pointer.hover_pos());
         let pointer_global = hover.map(|p| self.local_to_global(p, monitor, pixels_per_point));
         let pointer_inside = pointer_global.is_some_and(|p| monitor.contains(p));
-        if pointer_inside {
-            self.pointer_monitor = Some(monitor.index);
-        }
 
         let needs_focus = (pointer_inside && self.focused_monitor != Some(monitor.index))
             || (self.focused_monitor.is_none() && monitor.index == 0);
@@ -573,10 +571,6 @@ impl CosnipApp {
             }
         }
         self.show_text_editor(ui, monitor, pixels_per_point);
-        let tips_monitor = self.pointer_monitor.or(self.focused_monitor).unwrap_or(0);
-        if tips_monitor == monitor.index {
-            draw_tips(ui, screen);
-        }
         if self.focused_monitor == Some(monitor.index) && !text_editing {
             self.handle_keys(&ctx, bounds);
         }
@@ -1209,97 +1203,89 @@ impl CosnipApp {
         pixels_per_point: f32,
     ) {
         let local = self.global_to_local(selection, monitor, pixels_per_point);
-        let width = 680.0;
+        let width = 760.0;
+        let height = 40.0;
         let x = local.left().clamp(
             screen.left() + 4.0,
             (screen.right() - width - 4.0).max(screen.left() + 4.0),
         );
         let mut y = local.bottom() + 8.0;
-        if y + 86.0 > screen.bottom() {
-            y = (local.top() - 94.0).max(screen.top() + 4.0);
+        if y + height + 8.0 > screen.bottom() {
+            y = (local.top() - height - 8.0).max(screen.top() + 4.0);
         }
         egui::Area::new(Id::new(("cosnip-toolbar", monitor.index)))
             .fixed_pos(egui::pos2(x, y))
             .order(Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::NONE
-                    .fill(Color32::from_rgb(28, 28, 32))
-                    .inner_margin(egui::Margin::same(6))
-                    .corner_radius(egui::CornerRadius::same(6))
+                    .fill(Color32::from_rgba_unmultiplied(24, 24, 28, 232))
+                    .stroke(Stroke::new(1.0, Color32::from_white_alpha(22)))
+                    .inner_margin(egui::Margin::symmetric(6, 5))
+                    .corner_radius(egui::CornerRadius::same(8))
                     .show(ui, |ui| {
                         ui.set_max_width(width);
-                        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-                        ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+                        ui.horizontal(|ui| {
                             for tool in Tool::ALL {
-                                if ui
-                                    .selectable_label(self.tool == tool, tool.label())
-                                    .on_hover_text(tool_hint(tool))
-                                    .clicked()
-                                {
+                                let response = icon_button(
+                                    ui,
+                                    tool_icon(tool),
+                                    self.tool == tool,
+                                    true,
+                                    &format!("{}\n{}", tool.label(), tool_hint(tool)),
+                                );
+                                if response.clicked() {
                                     self.set_tool(tool);
                                 }
                             }
-                        });
-                        ui.separator();
-                        ui.horizontal_wrapped(|ui| {
-                            for color in PALETTE {
-                                let (rect, response) =
-                                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());
-                                ui.painter().rect_filled(
-                                    rect,
-                                    3.0,
-                                    Color32::from_rgba_unmultiplied(
-                                        color[0], color[1], color[2], color[3],
-                                    ),
-                                );
-                                if self.color == color {
-                                    ui.painter().rect_stroke(
-                                        rect.expand(1.0),
-                                        3.0,
-                                        Stroke::new(1.0, Color32::WHITE),
-                                        StrokeKind::Outside,
-                                    );
-                                }
-                                if response.clicked() {
-                                    self.color = color;
+                            toolbar_separator(ui);
+                            for (color, name) in PALETTE.iter().zip(COLOR_NAMES) {
+                                if color_button(ui, *color, self.color == *color, name).clicked() {
+                                    self.color = *color;
                                 }
                             }
-                            ui.separator();
+                            toolbar_separator(ui);
                             for width in WIDTHS {
-                                if ui
-                                    .selectable_label(
-                                        self.line_width == width,
-                                        format!("{width}px"),
-                                    )
-                                    .clicked()
-                                {
+                                let response = icon_button(
+                                    ui,
+                                    Icon::Stroke(width),
+                                    self.line_width == width,
+                                    true,
+                                    &format!("{width} px stroke"),
+                                );
+                                if response.clicked() {
                                     self.line_width = width;
                                 }
                             }
-                            ui.separator();
-                            if ui
-                                .add_enabled(self.annotations.can_undo(), egui::Button::new("Undo"))
+                            toolbar_separator(ui);
+                            let can_undo = self.annotations.can_undo();
+                            if icon_button(ui, Icon::Undo, false, can_undo, "Undo (Ctrl+Z)")
                                 .clicked()
+                                && can_undo
                             {
                                 self.annotations.undo();
                             }
-                            if ui
-                                .add_enabled(self.annotations.can_redo(), egui::Button::new("Redo"))
+                            let can_redo = self.annotations.can_redo();
+                            if icon_button(ui, Icon::Redo, false, can_redo, "Redo (Ctrl+Shift+Z)")
                                 .clicked()
+                                && can_redo
                             {
                                 self.annotations.redo();
                             }
-                            ui.separator();
-                            if ui.button("Copy").clicked() {
+                            toolbar_separator(ui);
+                            if icon_button(ui, Icon::Copy, false, true, "Copy (Enter / Ctrl+C)")
+                                .clicked()
+                            {
                                 self.confirm(ui.ctx(), Action::Copy);
                             }
-                            if ui.button("Save").clicked() {
+                            if icon_button(ui, Icon::Save, false, true, "Save (Ctrl+S)").clicked() {
                                 self.confirm(ui.ctx(), Action::Save);
                             }
-                            if ui.button("Pin").clicked() {
+                            if icon_button(ui, Icon::Pin, false, true, "Pin (P)").clicked() {
                                 self.confirm(ui.ctx(), Action::Pin);
                             }
-                            if ui.button("Cancel").clicked() {
+                            if icon_button(ui, Icon::Cancel, false, true, "Cancel (Esc)").clicked()
+                            {
                                 self.finish(ui.ctx(), 6);
                             }
                         });
@@ -1659,6 +1645,84 @@ fn tool_hint(tool: Tool) -> &'static str {
     }
 }
 
+fn tool_icon(tool: Tool) -> Icon {
+    match tool {
+        Tool::Select => Icon::Select,
+        Tool::Rectangle => Icon::Rectangle,
+        Tool::Ellipse => Icon::Ellipse,
+        Tool::Arrow => Icon::Arrow,
+        Tool::Line => Icon::Line,
+        Tool::Pencil => Icon::Pencil,
+        Tool::Marker => Icon::Marker,
+        Tool::Text => Icon::Text,
+        Tool::Number => Icon::Number,
+        Tool::Mosaic => Icon::Mosaic,
+        Tool::Blur => Icon::Blur,
+        Tool::Magnifier => Icon::Magnifier,
+        Tool::Eraser => Icon::Eraser,
+    }
+}
+
+fn icon_button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    active: bool,
+    enabled: bool,
+    tooltip: &str,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), Sense::click());
+    let background = if active {
+        Some(Color32::from_rgb(52, 104, 178))
+    } else if enabled && response.hovered() {
+        Some(Color32::from_white_alpha(18))
+    } else {
+        None
+    };
+    if let Some(background) = background {
+        ui.painter().rect_filled(rect, 4.0, background);
+    }
+    let color = if !enabled {
+        Color32::from_gray(96)
+    } else if active {
+        Color32::WHITE
+    } else {
+        Color32::from_gray(220)
+    };
+    icons::paint(ui.painter(), rect.shrink(4.0), icon, color);
+    response.on_hover_text(tooltip)
+}
+
+fn color_button(ui: &mut egui::Ui, color: [u8; 4], selected: bool, name: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());
+    ui.painter().rect_filled(
+        rect,
+        4.0,
+        Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
+    );
+    let border = if selected {
+        Color32::WHITE
+    } else if response.hovered() {
+        Color32::from_white_alpha(150)
+    } else {
+        Color32::from_white_alpha(45)
+    };
+    ui.painter().rect_stroke(
+        rect.expand(0.5),
+        4.0,
+        Stroke::new(if selected { 1.5 } else { 1.0 }, border),
+        StrokeKind::Outside,
+    );
+    response.on_hover_text(name)
+}
+
+fn toolbar_separator(ui: &mut egui::Ui) {
+    ui.add_space(3.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 18.0), Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 0.0, Color32::from_white_alpha(34));
+    ui.add_space(3.0);
+}
+
 fn draw_polyline_preview(
     painter: &egui::Painter,
     points: &[Point],
@@ -1756,36 +1820,6 @@ fn draw_crosshair(ui: &mut egui::Ui, rect: egui::Rect, pointer: egui::Pos2) {
         ],
         stroke,
     );
-}
-
-fn draw_tips(ui: &mut egui::Ui, screen: egui::Rect) {
-    let lines = [
-        "Drag to select · handles resize",
-        "Tools: click, then draw in the region",
-        "Ctrl+Z / Ctrl+Shift+Z  Undo / Redo",
-        "Right-click  Finish tool",
-        "Enter / Ctrl+C  Copy    Ctrl+S  Save",
-        "P  Pin    Esc  Cancel    Ctrl+A  All",
-        "Shift  Square    Arrows  Nudge",
-    ];
-    let line_height = 18.0;
-    let width = 380.0;
-    let height = line_height * lines.len() as f32 + 16.0;
-    let rect = egui::Rect::from_min_size(
-        egui::pos2(screen.left() + 16.0, screen.bottom() - height - 16.0),
-        egui::vec2(width, height),
-    );
-    ui.painter()
-        .rect_filled(rect, 6.0, Color32::from_black_alpha(190));
-    for (index, line) in lines.iter().enumerate() {
-        ui.painter().text(
-            rect.left_top() + egui::vec2(10.0, 8.0 + index as f32 * line_height),
-            egui::Align2::LEFT_TOP,
-            *line,
-            egui::FontId::monospace(12.0),
-            Color32::from_gray(230),
-        );
-    }
 }
 
 fn draw_size_badge(ui: &mut egui::Ui, selection: egui::Rect) {

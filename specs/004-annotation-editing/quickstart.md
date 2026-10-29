@@ -7,7 +7,7 @@ cargo build
 target/debug/cosnip snip --area 200 150 700 450 --save /tmp/annotated.png --no-copy
 ```
 
-Use the toolbar under the selection:
+Use the icon toolbar under the selection (hover an icon for its name and hint):
 
 - **Select** — move the selection or drag one of eight handles to resize.
 - **Rect / Ellipse / Arrow / Line** — drag inside the selection.

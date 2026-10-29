@@ -23,7 +23,8 @@ multi-monitor selection at 1x**, and **Feature 004 adds selection editing and an
   overlay, and a selection can cross monitor boundaries in global coordinates.
 - The selection has functional resize handles and can be moved before annotating.
 - Annotation tools: rectangle, ellipse, arrow, line, pencil, highlighter, text, number, mosaic,
-  blur, magnifier, and eraser. Undo/redo covers adding and erasing annotations.
+  blur, magnifier, and eraser, in a compact Snipaste-style icon toolbar with hover tooltips.
+  Undo/redo covers adding and erasing annotations.
 - Annotations are rasterized into copied, saved, and pinned output, including CJK text through
   system-font fallback.
 - Large desktops and large pinned images are split into GL textures no larger than the driver limit
@@ -71,8 +72,9 @@ target/release/cosnip --doctor
 
 Overlay keys: drag to select, drag inside to move, drag a handle to resize, arrows nudge, Shift
 keeps a square, Ctrl+A selects all, Ctrl+Z/Ctrl+Shift+Z undo/redo, Enter/Ctrl+C copies, Ctrl+S
-saves, P pins, Escape cancels the current tool or the overlay. Pick an annotation tool in the
-toolbar and draw inside the selection; right-click finishes/leaves the current tool.
+saves, P pins, Escape cancels the current tool or the overlay. The toolbar is icon-only; hover an
+icon for its name and hint. Persistent keyboard tips are intentionally not shown. Pick an annotation
+tool and draw inside the selection; right-click finishes/leaves the current tool.
 
 ## Platform support
 
@@ -110,6 +112,7 @@ simulated 960+960 layout).
   the rasterized output.
 - Mosaic/blur previews are block approximations; the saved/copied/pinned output uses the full
   software effect.
+- The overlay does not show persistent shortcut tips; shortcuts are documented here and in tooltips.
 - No tray/global hotkeys yet; use a desktop shortcut that invokes `cosnip snip`.
 - Clipboard persistence depends on a desktop clipboard manager; on a bare X11 session without one,
   the image may disappear when the process exits.
@@ -126,7 +129,7 @@ crates/
   cosnip-imaging/    crop, PNG encode, software annotation rasterizer (cosmic-text)
   cosnip-capture/    X11, Mutter ScreenCast + PipeWire, GNOME Screencast fallback
   cosnip-platform/   clipboard, paths, atomic writes, pointer queries
-  cosnip-ui/         eframe overlay and pin viewports
+  cosnip-ui/         eframe overlay, icon toolbar, pin viewports
   cosnip-app/        CLI and wiring
 specs/               SDD feature specifications and research
 docs/                ADR, parity matrix, dependency record

@@ -18,7 +18,8 @@ The reference product's core value is annotation: the user selects a region, mar
 copies, saves, or pins it.
 
 This feature adds a pure annotation model, a live overlay preview, a software output rasterizer,
-and a compact two-row toolbar.
+and a compact single-row icon toolbar with hover tooltips. Persistent keyboard tips are removed by
+design; the shortcut reference stays in the README and `--help`.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -165,7 +166,8 @@ present and the blue selection chrome is absent. Pin the same region and inspect
 - **FR-006**: Text output MUST use system-font shaping/rasterization with fallback, including CJK
   when a CJK font is installed.
 - **FR-007**: Mosaic and blur MUST alter output pixels; magnifier MUST sample the frozen frame.
-- **FR-008**: The toolbar MUST provide all tools, palette, widths, undo/redo, and output actions.
+- **FR-008**: The toolbar MUST provide all tools, palette, widths, undo/redo, and output actions as
+  a compact icon toolbar with hover tooltips.
 - **FR-009**: Pointer routing MUST distinguish handle resize, selection move, new selection, draft
   annotation, text editor, and eraser.
 - **FR-010**: Ctrl+Z, Ctrl+Shift+Z/Ctrl+Y, Escape, right-click, Enter, and existing output
@@ -174,6 +176,8 @@ present and the blue selection chrome is absent. Pin the same region and inspect
 - **FR-012**: Annotations MUST be stored in captured-frame coordinates and clipped at render time.
 - **FR-013**: No new `unsafe`, network access, telemetry, or reference assets may be introduced.
 - **FR-014**: The annotation model MUST remain in the pure core; UI and imaging consume it.
+- **FR-015**: Persistent bottom-left shortcut tips MUST be absent by default; hover tooltips MUST
+  identify icon buttons.
 
 ### Key Entities
 

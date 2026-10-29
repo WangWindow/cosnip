@@ -44,10 +44,14 @@ Two approaches were considered:
    - Mosaic and blur are real pixel effects; the magnifier samples the base frame.
    - Copy, save, and pin all use this rendered image, so UI chrome never appears in output.
 
-4. **The toolbar is one compact panel.**
-   - Tool row: Select, Rect, Ellipse, Arrow, Line, Pencil, Marker, Text, No., Mosaic, Blur, Zoom,
-     Eraser.
-   - Style row: palette, 1/3/6 px widths, Undo/Redo, Copy/Save/Pin/Cancel.
+4. **The toolbar is one compact single-row icon panel.**
+   - Tools: Select, Rect, Ellipse, Arrow, Line, Pencil, Marker, Text, No., Mosaic, Blur, Zoom,
+     Eraser; palette, widths, Undo/Redo, Copy/Save/Pin/Cancel.
+   - Icons are original line drawings implemented with egui primitives in `icons.rs`; no copied
+     reference assets.
+   - Active icons get a blue fill, hover gets a light fill, and every button has a tooltip.
+   - Persistent bottom-left shortcut tips are removed by design; the reference lives in README and
+     `--help`.
    - The panel is positioned in the monitor containing the selection center and clamped to the
      screen.
 
