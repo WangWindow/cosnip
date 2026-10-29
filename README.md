@@ -11,27 +11,37 @@ assets; it does not ship or copy reference code, strings, or resources. See
 
 **M0 reference analysis** is complete and accepted (Feature 001).
 
-**MVP (Feature 002) is implemented**:
+**MVP (Feature 002) is implemented**, and **Feature 003 adds lossless GNOME capture and
+multi-monitor selection at 1x**:
 
 - `cosnip snip` captures the desktop, shows a full-screen selection overlay, and copies, saves, or
   pins the selected region.
 - X11/Xorg capture uses native X11.
-- GNOME 49 Wayland uses a short `org.gnome.Shell.Screencast` fallback because Shell/portal
-  screenshot calls are denied on the target.
+- GNOME 49 Wayland uses **Mutter ScreenCast + PipeWire raw BGRx frames** (lossless). The old
+  `org.gnome.Shell.Screencast` H.264 path remains as an automatic, logged fallback.
+- Multi-monitor desktops are captured as one virtual desktop. Each monitor gets a fullscreen
+  overlay, and a selection can cross monitor boundaries in global coordinates.
+- Large desktops and large pinned images are split into GL textures no larger than the driver limit
+  (capped at 2048 per side), so 3840-pixel-wide layouts work on software/older GL stacks.
 - Pins are frameless override-redirect image windows with move, wheel zoom, and close.
 - Clipboard images survive process exit on GNOME via the shell clipboard manager (when it takes
   ownership).
 
 Still out of scope: annotations, tray, global hotkeys, settings UI, single-instance IPC, history,
-multi-monitor/mixed-DPI, KDE/portal capture, OCR, and paste-from-clipboard.
+mixed/fractional per-monitor DPI, KDE/portal capture, OCR, and paste-from-clipboard.
 
 ## Build
 
 ```bash
+# Debian/Ubuntu build dependencies for the PipeWire backend
+sudo apt install libpipewire-0.3-dev libspa-0.2-dev libclang-dev libllvm-dev clang
+
 cargo build --release
 cargo test
 ```
 
+The default build enables the lossless PipeWire backend. PipeWire is part of GNOME, so no extra
+runtime package is normally needed. `ffmpeg` is only required if the H.264 fallback is used.
 MSRV is Rust 1.95 (required by eframe/egui 0.37).
 
 ## Usage
@@ -60,26 +70,39 @@ Enter/Ctrl+C copies, Ctrl+S saves, P pins, Escape cancels.
 
 | Session | Backend | Status |
 |---|---|---|
-| X11/Xorg | native X11 `GetImage` | supported |
-| GNOME 49 Wayland + XWayland | GNOME Screencast single-frame fallback | supported, ~1.0–1.6 s capture |
+| X11/Xorg | native X11 `GetImage` | supported; pixel-exact |
+| GNOME 49 Wayland + XWayland | Mutter ScreenCast + PipeWire raw frames | supported; lossless, ~0.26–0.42 s |
+| GNOME Wayland without PipeWire | GNOME Shell Screencast H.264 | automatic fallback; lossy, ~1.1–1.7 s |
 | Other Wayland | — | unsupported in this MVP |
 | XWayland root capture | — | not used; cannot see native Wayland surfaces |
 
-The GNOME fallback requires `ffmpeg` on `PATH` and may briefly show the desktop recording
-indicator. It is an explicit MVP tradeoff; a PipeWire/Mutter ScreenCast backend is the planned
-replacement.
+`--doctor` reports the selected backend and every detected monitor. On GNOME the lossless path
+uses the same compositor stream as GNOME's recorder but reads raw `video/x-raw` buffers instead of
+encoding H.264; no temporary video is written.
+
+Multi-monitor is supported for a uniform scale of 1.0. Each monitor is covered by its own
+fullscreen overlay; selection, magnifier, toolbar, and output use global desktop coordinates.
+Real dual-monitor hardware validation is still pending (the implementation was verified with a
+simulated 960+960 layout).
 
 ## Limitations
 
-- Single monitor at scale 1.0 only; other layouts exit with a clear error.
+- Multi-monitor is supported at uniform scale 1.0. Mixed/fractional per-monitor DPI and monitor
+  transform correction are not yet implemented; a raw frame larger than the logical layout is
+  mapped with a uniform scale as a best effort.
+- Real dual-monitor hardware has not been available for validation; the per-monitor overlay,
+  focus transfer, and cross-screen drag were verified with a simulated layout.
+- Direct Mutter ScreenCast is GNOME-specific. Other Wayland desktops need the portal ScreenCast
+  path, which is future work.
+- PipeWire development headers, libclang, and libLLVM are required at build time.
 - No annotations or text editing yet.
 - No tray/global hotkeys yet; use a desktop shortcut that invokes `cosnip snip`.
 - Clipboard persistence depends on a desktop clipboard manager; on a bare X11 session without one,
   the image may disappear when the process exits.
 - Pins are opaque image-sized windows on GL configurations without alpha; shadows/rounded
   transparency are deferred.
-- GNOME Shell/portal screenshot APIs are denied in the tested environment; the Screencast fallback
-  is intentional.
+- The H.264 fallback may briefly show the desktop recording indicator and is used only when the
+  lossless path fails.
 
 ## Repository layout
 
@@ -87,7 +110,7 @@ replacement.
 crates/
   cosnip-core/       pure geometry, selection, frame, output types
   cosnip-imaging/    crop and PNG encode
-  cosnip-capture/    X11 and GNOME Screencast backends
+  cosnip-capture/    X11, Mutter ScreenCast + PipeWire, GNOME Screencast fallback
   cosnip-platform/   clipboard, paths, atomic writes, pointer queries
   cosnip-ui/         eframe overlay and pin viewports
   cosnip-app/        CLI and wiring
@@ -99,13 +122,27 @@ docs/                ADR, parity matrix, dependency record
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
 
 # Manual Xvfb integration (requires a running Xvfb):
 DISPLAY=:99 XDG_SESSION_TYPE=x11 cargo test -p cosnip-capture --test x11_capture -- --ignored
 DISPLAY=:99 XDG_SESSION_TYPE=x11 cargo test -p cosnip-app --test xvfb_smoke -- --ignored
 ```
 
-Performance on the target (release): X11 capture ~12–35 ms; GNOME Screencast capture ~1.1–1.7 s;
-overlay and pin are idle when not interacting.
+The Xvfb smoke test is also the 2048-texture-limit check on a 3840x1080 display.
+
+Debug-only simulated multi-monitor layout (two 960x1080 halves):
+
+```bash
+COSNIP_TEST_MONITORS='960x1080+0+0,960x1080+960+0' \
+COSNIP_TEST_WINDOWED_OVERLAY=1 \
+COSNIP_TEST_AUTOCONFIRM_MS=8000 \
+target/debug/cosnip snip --save /tmp/drag.png --no-copy
+```
+
+Drag across the 960-pixel boundary with an XTest tool; a 900→1100 horizontal drag saves 200 px.
+
+Performance on the target (debug build): X11 capture ~0.5 s at 3840x1080, ~12–35 ms at 1080p;
+GNOME Mutter/PipeWire capture-to-overlay 142–412 ms at 1920x1080; H.264 fallback ~1.1–1.7 s.
+Overlay and pin are idle when not interacting.

@@ -18,7 +18,11 @@ license, and attack surface (Constitution III).
 | `tiny-skia` | planned for annotations | BSD-3-Clause | CPU rasterization; not used by the MVP |
 | `cosmic-text` | planned for annotations | MIT OR Apache-2.0 | Text shaping and system-font fallback |
 | `kurbo` | not used (MVP uses integer core geometry) | MIT OR Apache-2.0 | Available for later vector paths |
-| `zbus` | 6.1 | MIT | GNOME Screencast D-Bus capture; `zbus::block_on` keeps one connection alive |
+| `zbus` | 6.1 | MIT | Mutter ScreenCast D-Bus session/signal; `zbus::block_on` keeps one connection alive |
+| `pipewire` | 0.10.1 | MIT | Lossless Mutter ScreenCast raw-frame capture; feature `v0_3_44`; target node passed to `Stream::connect` |
+| `libspa` / `libspa-sys` / `pipewire-sys` | 0.10.1 | MIT | Transitive PipeWire/SPA bindings for format negotiation and buffer mapping |
+| `futures-lite` | 2.6 | Apache-2.0 OR MIT | Polling the `PipeWireStreamAdded` signal with a timeout |
+| `async-io` | 2.6 | Apache-2.0 OR MIT | Timeout timer for D-Bus signal/stream startup |
 | `ashpd` | planned | MIT | Portal ScreenCast/GlobalShortcuts for a later backend |
 | `ksni` | planned for tray | MIT | StatusNotifierItem tray; GNOME may require an extension |
 | `clap` | 4.6 | MIT OR Apache-2.0 | CLI surface |
@@ -42,13 +46,24 @@ license, and attack surface (Constitution III).
 | Snipaste 2.11.3 AppImage | 2.11.3 | Proprietary freeware | Behavioral reference; not redistributed |
 | `ffmpeg` | system | GPL/LGPL build-dependent | Optional runtime decoder for the GNOME Screencast fallback; not bundled |
 
+## Build-Time System Dependencies
+
+| Item | Role |
+|---|---|
+| `libpipewire-0.3-dev`, `libspa-0.2-dev` | Headers and pkg-config files for `pipewire-sys`/`libspa-sys` |
+| `libclang` / `libLLVM` | bindgen at build time for the PipeWire/SPA bindings |
+| C compiler and GCC include directory | `BINDGEN_EXTRA_CLANG_ARGS` must find `stdbool.h` when using a sysroot |
+
+These are build-time only. The resulting binary links `libpipewire-0.3.so.0`, which is present on
+GNOME/PipeWire systems.
+
 The analysis tools are development-time instruments. They must not become runtime, build, or test
 dependencies (Constitution II).
 
-`ffmpeg` is an external runtime dependency only for the GNOME 49 Screencast fallback. `--doctor`
-detects it; the binary does not bundle it. The default GNOME Screencast encoder is lossy H.264;
-use Xorg for pixel-exact capture, or the future PipeWire/Mutter ScreenCast backend. A future
-backend should remove the ffmpeg dependency.
+`ffmpeg` is an external runtime dependency only for the GNOME Screencast H.264 fallback. `--doctor`
+detects it; the binary does not bundle it. The default GNOME Wayland path is now lossless Mutter
+ScreenCast + PipeWire and does not invoke `ffmpeg` or write temporary media. The fallback remains
+for systems where PipeWire is unavailable or the Mutter stream fails.
 
 ## Rejected for This Device
 

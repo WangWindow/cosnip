@@ -8,7 +8,14 @@ description = "Desktop capture backends for Cosnip"
 
 [dependencies]
 cosnip-core = { path = "../cosnip-core" }
+async-io = { workspace = true, optional = true }
+futures-lite = { workspace = true, optional = true }
+pipewire = { workspace = true, optional = true }
 tempfile.workspace = true
 thiserror.workspace = true
 x11rb.workspace = true
 zbus.workspace = true
+
+[features]
+default = ["pipewire"]
+pipewire = ["dep:async-io", "dep:futures-lite", "dep:pipewire"]

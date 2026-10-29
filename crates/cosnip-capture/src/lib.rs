@@ -1,10 +1,13 @@
 #![forbid(unsafe_code)]
 //! Desktop capture backends.
 //!
-//! X11 capture is for Xorg sessions. GNOME 49 Wayland falls back to a single-frame
+//! X11 capture is for Xorg sessions. GNOME Wayland uses Mutter ScreenCast + PipeWire raw frames
+//! (lossless); if that path fails it falls back to a single-frame
 //! `org.gnome.Shell.Screencast` recording because the Shell/portal screenshot APIs are denied.
 
 pub mod gnome;
+#[cfg(feature = "pipewire")]
+pub mod mutter;
 pub mod x11;
 
 use std::path::PathBuf;
@@ -12,11 +15,14 @@ use std::path::PathBuf;
 use cosnip_core::Frame;
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
+use x11rb::protocol::xproto::ConnectionExt as _;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureBackendKind {
     X11,
     GnomeScreencast,
+    #[cfg(feature = "pipewire")]
+    GnomePipewire,
 }
 
 impl CaptureBackendKind {
@@ -25,6 +31,8 @@ impl CaptureBackendKind {
         match self {
             Self::X11 => "x11",
             Self::GnomeScreencast => "gnome-screencast",
+            #[cfg(feature = "pipewire")]
+            Self::GnomePipewire => "gnome-pipewire",
         }
     }
 }
@@ -36,6 +44,58 @@ pub struct ScreenInfo {
     pub count: usize,
     pub scale: f64,
     pub name: String,
+}
+
+/// One monitor in captured-desktop (X11 root) coordinates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MonitorInfo {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+    pub name: String,
+}
+
+/// Enumerate active RandR monitors. X11 and XWayland both expose the desktop layout here.
+pub fn monitors() -> Result<Vec<MonitorInfo>, CaptureError> {
+    let (conn, screen_num) = x11rb::connect(None).map_err(|e| CaptureError::X11(e.to_string()))?;
+    let screen = &conn.setup().roots[screen_num];
+    let reply = conn
+        .randr_get_monitors(screen.root, true)
+        .map_err(|e| CaptureError::X11(e.to_string()))?
+        .reply()
+        .map_err(|e| CaptureError::X11(e.to_string()))?;
+    let mut monitors = reply
+        .monitors
+        .iter()
+        .enumerate()
+        .map(|(index, monitor)| MonitorInfo {
+            x: i32::from(monitor.x),
+            y: i32::from(monitor.y),
+            width: u32::from(monitor.width),
+            height: u32::from(monitor.height),
+            primary: monitor.primary,
+            name: conn
+                .get_atom_name(monitor.name)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .map(|reply| String::from_utf8_lossy(&reply.name).into_owned())
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| format!("monitor-{index}")),
+        })
+        .collect::<Vec<_>>();
+    if monitors.is_empty() {
+        monitors.push(MonitorInfo {
+            x: 0,
+            y: 0,
+            width: u32::from(screen.width_in_pixels),
+            height: u32::from(screen.height_in_pixels),
+            primary: true,
+            name: format!("{}x{}", screen.width_in_pixels, screen.height_in_pixels),
+        });
+    }
+    Ok(monitors)
 }
 
 pub trait CaptureBackend: Send + Sync {
@@ -82,7 +142,14 @@ pub fn desktop_is_gnome() -> bool {
 pub fn detect_backend() -> Result<CaptureBackendKind, CaptureError> {
     if session_is_wayland() {
         if desktop_is_gnome() {
-            Ok(CaptureBackendKind::GnomeScreencast)
+            #[cfg(feature = "pipewire")]
+            {
+                Ok(CaptureBackendKind::GnomePipewire)
+            }
+            #[cfg(not(feature = "pipewire"))]
+            {
+                Ok(CaptureBackendKind::GnomeScreencast)
+            }
         } else {
             Err(CaptureError::Unsupported(
                 "Wayland desktop is not GNOME; only GNOME Screencast and Xorg are supported in this MVP"
@@ -101,6 +168,8 @@ pub fn backend(kind: CaptureBackendKind) -> Box<dyn CaptureBackend> {
     match kind {
         CaptureBackendKind::X11 => Box::new(x11::X11Backend),
         CaptureBackendKind::GnomeScreencast => Box::new(gnome::GnomeScreencast),
+        #[cfg(feature = "pipewire")]
+        CaptureBackendKind::GnomePipewire => Box::new(mutter::MutterPipewire),
     }
 }
 

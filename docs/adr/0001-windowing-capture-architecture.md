@@ -4,6 +4,8 @@
 - **Date**: 2026-10-29
 - **Feature**: `001-reference-parity-foundation`
 - **Deciders**: Project owner, implementation team
+- **Superseded in part**: ADR 0002 replaces the planned GNOME Wayland PipeWire path with a direct
+  Mutter ScreenCast implementation and adds per-monitor overlays.
 
 ## Context
 

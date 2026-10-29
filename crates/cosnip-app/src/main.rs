@@ -83,10 +83,6 @@ fn snip(args: SnipArgs) -> ExitCode {
         eprintln!("cosnip: {error}");
         return ExitCode::from(3);
     }
-    if let Err(error) = check_single_monitor() {
-        eprintln!("cosnip: {error}");
-        return ExitCode::from(3);
-    }
 
     let started = Instant::now();
     let frame = match backend.capture() {
@@ -140,6 +136,7 @@ fn snip(args: SnipArgs) -> ExitCode {
             initial_selection,
             output,
             save_path: args.save,
+            monitors: cosnip_capture::monitors().unwrap_or_default(),
         },
     );
     if outcome.code != 0 {
@@ -169,23 +166,6 @@ fn initial_selection(args: &SnipArgs, width: u32, height: u32) -> Result<Option<
         .ok_or_else(|| "area is outside the captured desktop".into())
 }
 
-fn check_single_monitor() -> Result<(), String> {
-    let info = screen_info().map_err(|e| e.to_string())?;
-    if info.count > 1 {
-        return Err(format!(
-            "multi-monitor is not supported in this MVP ({} monitors)",
-            info.count
-        ));
-    }
-    if (info.scale - 1.0).abs() > f64::EPSILON {
-        return Err(format!(
-            "mixed/ fractional scaling is not supported in this MVP (scale {})",
-            info.scale
-        ));
-    }
-    Ok(())
-}
-
 fn doctor() -> ExitCode {
     let wayland = cosnip_capture::session_is_wayland();
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
@@ -202,6 +182,14 @@ fn doctor() -> ExitCode {
             info.count, info.width, info.height, info.scale, info.name
         ),
         Err(error) => println!("monitors: unavailable ({error})"),
+    }
+    if let Ok(monitors) = cosnip_capture::monitors() {
+        for (index, monitor) in monitors.iter().enumerate() {
+            println!(
+                "monitor {index}: {} {}x{} at {},{}",
+                monitor.name, monitor.width, monitor.height, monitor.x, monitor.y
+            );
+        }
     }
     match detect_backend() {
         Ok(kind) => {

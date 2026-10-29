@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use cosnip_capture::CaptureBackendKind;
+use cosnip_capture::{CaptureBackendKind, MonitorInfo};
 use cosnip_core::{Frame, OutputRequest, Point, Rect, Selection};
 use cosnip_imaging::{crop, encode_png};
 use cosnip_platform::{
@@ -22,7 +22,6 @@ use egui::{
 };
 use winit::platform::x11::EventLoopBuilderExtX11;
 
-const OVERLAY_ID: &str = "cosnip-overlay";
 const PIN_ID: &str = "cosnip-pin";
 
 #[derive(Clone, Debug)]
@@ -31,6 +30,34 @@ pub struct UiOptions {
     pub initial_selection: Option<Rect>,
     pub output: OutputRequest,
     pub save_path: Option<PathBuf>,
+    pub monitors: Vec<MonitorInfo>,
+}
+
+/// A monitor placed in captured-frame pixels and backed by one fullscreen overlay viewport.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OverlayMonitor {
+    index: usize,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+impl OverlayMonitor {
+    fn viewport(&self) -> ViewportId {
+        ViewportId::from_hash_of(("cosnip-overlay", self.index))
+    }
+
+    fn rect(&self) -> Rect {
+        Rect::new(self.x, self.y, self.width, self.height)
+    }
+
+    fn contains(&self, point: Point) -> bool {
+        point.x >= self.x
+            && point.y >= self.y
+            && point.x < self.x.saturating_add(self.width as i32)
+            && point.y < self.y.saturating_add(self.height as i32)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,14 +115,17 @@ pub fn run(frame: Frame, options: UiOptions) -> Outcome {
 
 struct CosnipApp {
     frame: Arc<Frame>,
-    texture: Option<TextureHandle>,
+    tiles: Vec<FrameTile>,
     selection: Selection,
     output: OutputRequest,
     save_path: Option<PathBuf>,
     overlay_open: bool,
-    overlay_focused: bool,
+    monitors: Vec<OverlayMonitor>,
+    focused_monitor: Option<usize>,
+    cursor_hidden: Vec<bool>,
+    pointer_monitor: Option<usize>,
     drag_anchor: Option<Point>,
-    pointer: Option<Point>,
+    drag_monitor: Option<usize>,
     pin: Option<Pin>,
     clipboard: Option<ClipboardOwner>,
     outcome: Arc<Mutex<Outcome>>,
@@ -106,7 +136,7 @@ struct CosnipApp {
 
 struct Pin {
     frame: Frame,
-    texture: TextureHandle,
+    tiles: Vec<PinTile>,
     position: (f32, f32),
     scale: f32,
     viewport: ViewportId,
@@ -115,18 +145,47 @@ struct Pin {
     dragging: bool,
 }
 
+struct PinTile {
+    texture: TextureHandle,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+/// A slice of the captured frame small enough for the GL texture-size limit.
+struct FrameTile {
+    texture: TextureHandle,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+impl FrameTile {
+    fn rect(&self) -> Rect {
+        Rect::new(self.x, self.y, self.width, self.height)
+    }
+}
+
 impl CosnipApp {
     fn new(frame: Frame, options: UiOptions, outcome: Arc<Mutex<Outcome>>) -> Self {
+        let layout = monitor_override().unwrap_or(options.monitors);
+        let monitors = fit_monitors(&layout, frame.width(), frame.height());
+        let cursor_hidden = vec![false; monitors.len()];
         Self {
             frame: Arc::new(frame),
-            texture: None,
+            tiles: Vec::new(),
             selection: Selection::new(options.initial_selection),
             output: options.output,
             save_path: options.save_path,
             overlay_open: true,
-            overlay_focused: false,
+            monitors,
+            focused_monitor: None,
+            cursor_hidden,
+            pointer_monitor: None,
             drag_anchor: None,
-            pointer: None,
+            drag_monitor: None,
             pin: None,
             clipboard: None,
             outcome,
@@ -140,12 +199,31 @@ impl CosnipApp {
     }
 
     fn with_context(mut self, cc: &eframe::CreationContext<'_>) -> Self {
-        let size = [self.frame.width() as usize, self.frame.height() as usize];
-        let image = ColorImage::from_rgba_unmultiplied(size, self.frame.rgba());
-        self.texture = Some(
-            cc.egui_ctx
-                .load_texture("capture", image, TextureOptions::LINEAR),
-        );
+        let max_side = texture_tile_size(&cc.egui_ctx);
+        for y in (0..self.frame.height()).step_by(max_side as usize) {
+            for x in (0..self.frame.width()).step_by(max_side as usize) {
+                let width = max_side.min(self.frame.width() - x);
+                let height = max_side.min(self.frame.height() - y);
+                let rect = Rect::new(x as i32, y as i32, width, height);
+                let Ok(tile) = crop(&self.frame, rect) else {
+                    continue;
+                };
+                let size = [tile.width() as usize, tile.height() as usize];
+                let image = ColorImage::from_rgba_unmultiplied(size, tile.rgba());
+                let texture = cc.egui_ctx.load_texture(
+                    format!("capture-{x}-{y}"),
+                    image,
+                    TextureOptions::LINEAR,
+                );
+                self.tiles.push(FrameTile {
+                    texture,
+                    x: rect.x,
+                    y: rect.y,
+                    width,
+                    height,
+                });
+            }
+        }
         self
     }
 
@@ -157,7 +235,9 @@ impl CosnipApp {
         self.done = true;
         self.overlay_open = false;
         self.outcome.lock().unwrap().code = code;
-        ctx.send_viewport_cmd_to(ViewportId::from_hash_of(OVERLAY_ID), ViewportCommand::Close);
+        for monitor in &self.monitors {
+            ctx.send_viewport_cmd_to(monitor.viewport(), ViewportCommand::Close);
+        }
         self.exit_at = Some(std::time::Instant::now() + delay);
         if !delay.is_zero() {
             ctx.request_repaint_after(delay);
@@ -166,7 +246,9 @@ impl CosnipApp {
 
     fn close_overlay(&mut self, ctx: &egui::Context) {
         self.overlay_open = false;
-        ctx.send_viewport_cmd_to(ViewportId::from_hash_of(OVERLAY_ID), ViewportCommand::Close);
+        for monitor in &self.monitors {
+            ctx.send_viewport_cmd_to(monitor.viewport(), ViewportCommand::Close);
+        }
     }
 
     fn selected_rect(&self) -> Option<Rect> {
@@ -206,12 +288,32 @@ impl CosnipApp {
     fn pin(&mut self, ctx: &egui::Context) -> Result<(), String> {
         let rect = self.selected_rect().ok_or("no selection")?;
         let image = crop(&self.frame, rect).map_err(|e| e.to_string())?;
-        let size = [image.width() as usize, image.height() as usize];
-        let color = ColorImage::from_rgba_unmultiplied(size, image.rgba());
-        let texture = ctx.load_texture("pin", color, TextureOptions::LINEAR);
+        let mut tiles = Vec::new();
+        let max_side = texture_tile_size(ctx);
+        for y in (0..image.height()).step_by(max_side as usize) {
+            for x in (0..image.width()).step_by(max_side as usize) {
+                let width = max_side.min(image.width() - x);
+                let height = max_side.min(image.height() - y);
+                let tile_rect = Rect::new(x as i32, y as i32, width, height);
+                let Ok(tile) = crop(&image, tile_rect) else {
+                    continue;
+                };
+                let size = [tile.width() as usize, tile.height() as usize];
+                let color = ColorImage::from_rgba_unmultiplied(size, tile.rgba());
+                let texture =
+                    ctx.load_texture(format!("pin-{x}-{y}"), color, TextureOptions::LINEAR);
+                tiles.push(PinTile {
+                    texture,
+                    x: tile_rect.x,
+                    y: tile_rect.y,
+                    width,
+                    height,
+                });
+            }
+        }
         self.pin = Some(Pin {
             frame: image,
-            texture,
+            tiles,
             position: (rect.x as f32, rect.y as f32),
             scale: 1.0,
             viewport: ViewportId::from_hash_of(PIN_ID),
@@ -277,87 +379,168 @@ impl CosnipApp {
     }
 
     fn show_overlay(&mut self, ctx: &egui::Context) {
-        let mut builder = egui::ViewportBuilder::default()
-            .with_title("Cosnip Snipper")
-            .with_decorations(false)
-            .with_always_on_top()
-            .with_has_shadow(false);
-        if std::env::var_os("COSNIP_TEST_WINDOWED_OVERLAY").is_some() {
-            builder = builder
-                .with_position([0.0, 0.0])
-                .with_inner_size([self.frame.width() as f32, self.frame.height() as f32]);
-        } else {
-            builder = builder.with_fullscreen(true).with_monitor(0);
+        for monitor in self.monitors.clone() {
+            let mut builder = egui::ViewportBuilder::default()
+                .with_title(format!("Cosnip Snipper {}", monitor.index + 1))
+                .with_decorations(false)
+                .with_always_on_top()
+                .with_has_shadow(false);
+            if std::env::var_os("COSNIP_TEST_WINDOWED_OVERLAY").is_some() {
+                builder = builder
+                    .with_position([monitor.x as f32, monitor.y as f32])
+                    .with_inner_size([monitor.width as f32, monitor.height as f32]);
+            } else {
+                builder = builder.with_fullscreen(true).with_monitor(monitor.index);
+            }
+            ctx.show_viewport_immediate(monitor.viewport(), builder, |ui, _class| {
+                self.overlay_ui(ui, &monitor);
+            });
         }
-        ctx.show_viewport_immediate(
-            ViewportId::from_hash_of(OVERLAY_ID),
-            builder,
-            |ui, _class| {
-                let ctx = ui.ctx().clone();
-                if !self.overlay_focused {
-                    self.overlay_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
-                    ctx.send_viewport_cmd(ViewportCommand::Focus);
-                    ctx.send_viewport_cmd(ViewportCommand::CursorVisible(false));
-                }
-                let rect = ui.max_rect();
-                let bounds = Rect::new(0, 0, self.frame.width(), self.frame.height());
-                let pointer = ctx.input(|i| i.pointer.hover_pos());
-                let pointer_px =
-                    pointer.map(|p| Point::new(p.x.round() as i32, p.y.round() as i32));
-                self.pointer = pointer_px;
+    }
 
-                let response =
-                    ui.interact(rect, Id::new("overlay-canvas"), Sense::click_and_drag());
-                if ctx.input(|i| i.pointer.primary_pressed())
-                    && response.hovered()
-                    && let Some(p) = pointer_px
-                {
-                    self.drag_anchor = Some(p);
-                    self.selection.begin(p);
-                }
-                if response.drag_started()
-                    && self.drag_anchor.is_none()
-                    && let Some(p) = pointer_px
-                {
-                    self.drag_anchor = Some(p);
-                    self.selection.begin(p);
-                }
-                if let (Some(anchor), Some(current)) = (self.drag_anchor, pointer_px)
-                    && (response.dragged() || ctx.input(|i| i.pointer.primary_down()))
-                {
-                    let square = ctx.input(|i| i.modifiers.shift);
-                    self.selection.drag_to(anchor, current, bounds, square);
-                }
-                if response.drag_stopped() || ctx.input(|i| i.pointer.any_released()) {
-                    self.drag_anchor = None;
-                }
+    fn overlay_ui(&mut self, ui: &mut egui::Ui, monitor: &OverlayMonitor) {
+        let ctx = ui.ctx().clone();
+        let screen = ui.max_rect();
+        let pixels_per_point = ctx.pixels_per_point();
+        let bounds = Rect::new(0, 0, self.frame.width(), self.frame.height());
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+        if focused {
+            self.focused_monitor = Some(monitor.index);
+        }
+        let hover = ctx.input(|i| i.pointer.hover_pos());
+        let pointer_global = hover.map(|p| self.local_to_global(p, monitor, pixels_per_point));
+        let pointer_inside = pointer_global.is_some_and(|p| monitor.contains(p));
+        if pointer_inside {
+            self.pointer_monitor = Some(monitor.index);
+        }
 
-                // Draw the frozen frame.
-                if let Some(texture) = &self.texture {
-                    ui.painter().image(
-                        texture.id(),
-                        rect,
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
-                }
-                let selection = self.selected_rect();
-                draw_dim(ui, rect, selection);
-                if let Some(selection) = selection {
-                    draw_selection(ui, selection);
-                }
-                if let Some(p) = pointer {
-                    draw_crosshair(ui, rect, p);
-                    self.draw_magnifier(ui, rect, p);
-                }
-                if let Some(selection) = selection {
-                    draw_size_badge(ui, selection);
-                    self.show_toolbar(&ctx, selection);
-                }
-                draw_tips(ui, rect);
-                self.handle_keys(&ctx, bounds);
-            },
+        let needs_focus = (pointer_inside && self.focused_monitor != Some(monitor.index))
+            || (self.focused_monitor.is_none() && monitor.index == 0);
+        if needs_focus && !focused {
+            ctx.send_viewport_cmd(ViewportCommand::Focus);
+            self.focused_monitor = Some(monitor.index);
+        }
+        if !self.cursor_hidden[monitor.index] {
+            ctx.send_viewport_cmd(ViewportCommand::CursorVisible(false));
+            self.cursor_hidden[monitor.index] = true;
+        }
+
+        let response = ui.interact(
+            screen,
+            Id::new(("overlay-canvas", monitor.index)),
+            Sense::click_and_drag(),
         );
+        if ctx.input(|i| i.pointer.primary_pressed())
+            && response.hovered()
+            && let Some(p) = pointer_global
+        {
+            self.drag_anchor = Some(p);
+            self.drag_monitor = Some(monitor.index);
+            self.selection.begin(p);
+        }
+        if response.drag_started()
+            && self.drag_anchor.is_none()
+            && let Some(p) = pointer_global
+        {
+            self.drag_anchor = Some(p);
+            self.drag_monitor = Some(monitor.index);
+            self.selection.begin(p);
+        }
+        let is_drag_monitor = self.drag_monitor == Some(monitor.index);
+        if let (Some(anchor), Some(current)) = (self.drag_anchor, pointer_global)
+            && is_drag_monitor
+            && (response.dragged() || ctx.input(|i| i.pointer.primary_down()))
+        {
+            let square = ctx.input(|i| i.modifiers.shift);
+            self.selection.drag_to(anchor, current, bounds, square);
+        }
+        if is_drag_monitor && (response.drag_stopped() || ctx.input(|i| i.pointer.any_released())) {
+            self.drag_anchor = None;
+            self.drag_monitor = None;
+        }
+
+        // Draw this monitor's slice of the frozen frame, tile by tile.
+        for tile in &self.tiles {
+            let Some(visible) = tile.rect().intersect(monitor.rect()) else {
+                continue;
+            };
+            let target = self.global_to_local(visible, monitor, pixels_per_point);
+            let uv = egui::Rect::from_min_max(
+                egui::pos2(
+                    (visible.x - tile.x) as f32 / tile.width as f32,
+                    (visible.y - tile.y) as f32 / tile.height as f32,
+                ),
+                egui::pos2(
+                    (visible.x - tile.x + visible.width as i32) as f32 / tile.width as f32,
+                    (visible.y - tile.y + visible.height as i32) as f32 / tile.height as f32,
+                ),
+            );
+            ui.painter()
+                .image(tile.texture.id(), target, uv, Color32::WHITE);
+        }
+        let selection = self.selected_rect();
+        let local_selection = selection
+            .map(|selection| self.global_to_local(selection, monitor, pixels_per_point))
+            .filter(|selection| selection.intersects(screen))
+            .map(|selection| selection.intersect(screen));
+        draw_dim(ui, screen, local_selection);
+        if let Some(selection) = selection {
+            let local = self.global_to_local(selection, monitor, pixels_per_point);
+            draw_selection(ui, screen, local);
+        }
+        if let Some(local_pointer) = hover
+            && pointer_inside
+        {
+            draw_crosshair(ui, screen, local_pointer);
+            self.draw_magnifier(ui, screen, local_pointer, pointer_global.unwrap());
+        }
+        if let Some(selection) = selection {
+            if monitor.contains(Point::new(selection.x, selection.y)) {
+                let local = self.global_to_local(selection, monitor, pixels_per_point);
+                draw_size_badge(ui, local);
+            }
+            if selection_center_monitor(&self.monitors, selection) == Some(monitor.index) {
+                self.show_toolbar(&ctx, monitor, selection, screen, pixels_per_point);
+            }
+        }
+        let tips_monitor = self.pointer_monitor.or(self.focused_monitor).unwrap_or(0);
+        if tips_monitor == monitor.index {
+            draw_tips(ui, screen);
+        }
+        if self.focused_monitor == Some(monitor.index) {
+            self.handle_keys(&ctx, bounds);
+        }
+    }
+
+    fn local_to_global(
+        &self,
+        point: egui::Pos2,
+        monitor: &OverlayMonitor,
+        pixels_per_point: f32,
+    ) -> Point {
+        Point::new(
+            monitor.x + (point.x * pixels_per_point).round() as i32,
+            monitor.y + (point.y * pixels_per_point).round() as i32,
+        )
+    }
+
+    fn global_to_local(
+        &self,
+        rect: Rect,
+        monitor: &OverlayMonitor,
+        pixels_per_point: f32,
+    ) -> egui::Rect {
+        let scale = pixels_per_point.max(f32::EPSILON);
+        egui::Rect::from_min_max(
+            egui::pos2(
+                (rect.x - monitor.x) as f32 / scale,
+                (rect.y - monitor.y) as f32 / scale,
+            ),
+            egui::pos2(
+                (rect.right() - monitor.x) as f32 / scale,
+                (rect.bottom() - monitor.y) as f32 / scale,
+            ),
+        )
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context, bounds: Rect) {
@@ -399,10 +582,26 @@ impl CosnipApp {
         }
     }
 
-    fn show_toolbar(&mut self, ctx: &egui::Context, selection: Rect) {
-        let position = egui::pos2(selection.x as f32, selection.bottom() as f32 + 8.0);
-        egui::Area::new(Id::new("cosnip-toolbar"))
-            .fixed_pos(position)
+    fn show_toolbar(
+        &mut self,
+        ctx: &egui::Context,
+        monitor: &OverlayMonitor,
+        selection: Rect,
+        screen: egui::Rect,
+        pixels_per_point: f32,
+    ) {
+        let local = self.global_to_local(selection, monitor, pixels_per_point);
+        let width = 228.0;
+        let x = local.left().clamp(
+            screen.left() + 4.0,
+            (screen.right() - width - 4.0).max(screen.left() + 4.0),
+        );
+        let mut y = local.bottom() + 8.0;
+        if y + 40.0 > screen.bottom() {
+            y = (local.top() - 44.0).max(screen.top() + 4.0);
+        }
+        egui::Area::new(Id::new(("cosnip-toolbar", monitor.index)))
+            .fixed_pos(egui::pos2(x, y))
             .order(Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::NONE
@@ -428,8 +627,13 @@ impl CosnipApp {
             });
     }
 
-    fn draw_magnifier(&self, ui: &mut egui::Ui, rect: egui::Rect, pointer: egui::Pos2) {
-        let center = Point::new(pointer.x.round() as i32, pointer.y.round() as i32);
+    fn draw_magnifier(
+        &self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        pointer: egui::Pos2,
+        center: Point,
+    ) {
         let radius = 5;
         let cell = 8.0;
         let box_size = egui::vec2(
@@ -500,7 +704,18 @@ impl CosnipApp {
             .with_inner_size([size.x, size.y])
             .with_has_shadow(false);
         let viewport = pin.viewport;
-        let texture = pin.texture.id();
+        let tiles = pin
+            .tiles
+            .iter()
+            .map(|tile| {
+                let min = egui::pos2(tile.x as f32 * pin.scale, tile.y as f32 * pin.scale);
+                let max = egui::pos2(
+                    (tile.x + tile.width as i32) as f32 * pin.scale,
+                    (tile.y + tile.height as i32) as f32 * pin.scale,
+                );
+                (tile.texture.id(), egui::Rect::from_min_max(min, max))
+            })
+            .collect::<Vec<_>>();
         let base_size = base;
         let mut new_position = pin.position;
         let mut new_scale = pin.scale;
@@ -508,12 +723,15 @@ impl CosnipApp {
         ctx.show_viewport_immediate(viewport, builder, |ui, _class| {
             let ctx = ui.ctx().clone();
             let rect = ui.max_rect();
-            ui.painter().image(
-                texture,
-                rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            for (texture, target) in &tiles {
+                ui.painter().image(
+                    *texture,
+                    target.translate(rect.min.to_vec2()),
+                    uv,
+                    Color32::WHITE,
+                );
+            }
             let response = ui.interact(rect, Id::new("pin-canvas"), Sense::click_and_drag());
             if response.drag_started()
                 && let Some(current) = global_pointer()
@@ -609,6 +827,10 @@ impl eframe::App for CosnipApp {
         }
         if self.overlay_open {
             self.show_overlay(ctx);
+            if self.drag_anchor.is_some() && !primary_button_down() {
+                self.drag_anchor = None;
+                self.drag_monitor = None;
+            }
         }
         if self.pin.is_some() {
             self.show_pin(ctx);
@@ -631,17 +853,110 @@ impl eframe::App for CosnipApp {
     }
 }
 
-fn draw_dim(ui: &mut egui::Ui, rect: egui::Rect, selection: Option<Rect>) {
+fn texture_tile_size(ctx: &egui::Context) -> u32 {
+    ctx.input(|i| i.max_texture_side).clamp(64, 2048) as u32
+}
+
+#[cfg(debug_assertions)]
+fn monitor_override() -> Option<Vec<MonitorInfo>> {
+    let value = std::env::var("COSNIP_TEST_MONITORS").ok()?;
+    let mut monitors = Vec::new();
+    for (index, part) in value.split(',').enumerate() {
+        let (size, position) = part.trim().split_once('+')?;
+        let (width, height) = size.split_once('x')?;
+        let (x, y) = position.split_once('+')?;
+        monitors.push(MonitorInfo {
+            x: x.parse().ok()?,
+            y: y.parse().ok()?,
+            width: width.parse().ok()?,
+            height: height.parse().ok()?,
+            primary: index == 0,
+            name: format!("test-{index}"),
+        });
+    }
+    (!monitors.is_empty()).then_some(monitors)
+}
+
+#[cfg(not(debug_assertions))]
+fn monitor_override() -> Option<Vec<MonitorInfo>> {
+    None
+}
+
+/// Map RandR monitor coordinates onto the captured frame and assign each one a viewport.
+fn fit_monitors(monitors: &[MonitorInfo], width: u32, height: u32) -> Vec<OverlayMonitor> {
+    let width = width.max(1);
+    let height = height.max(1);
+    if monitors.is_empty() {
+        return vec![OverlayMonitor {
+            index: 0,
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }];
+    }
+    let min_x = monitors.iter().map(|m| m.x).min().unwrap_or(0);
+    let min_y = monitors.iter().map(|m| m.y).min().unwrap_or(0);
+    let max_x = monitors
+        .iter()
+        .map(|m| m.x.saturating_add(m.width as i32))
+        .max()
+        .unwrap_or(min_x.saturating_add(1));
+    let max_y = monitors
+        .iter()
+        .map(|m| m.y.saturating_add(m.height as i32))
+        .max()
+        .unwrap_or(min_y.saturating_add(1));
+    let span_x = f64::from(max_x.saturating_sub(min_x).max(1));
+    let span_y = f64::from(max_y.saturating_sub(min_y).max(1));
+    let scale_x = f64::from(width) / span_x;
+    let scale_y = f64::from(height) / span_y;
+    monitors
+        .iter()
+        .enumerate()
+        .map(|(index, monitor)| {
+            let left = ((f64::from(monitor.x.saturating_sub(min_x))) * scale_x).round() as i32;
+            let top = ((f64::from(monitor.y.saturating_sub(min_y))) * scale_y).round() as i32;
+            let right = ((f64::from(monitor.x.saturating_sub(min_x)) + f64::from(monitor.width))
+                * scale_x)
+                .round() as i32;
+            let bottom = ((f64::from(monitor.y.saturating_sub(min_y)) + f64::from(monitor.height))
+                * scale_y)
+                .round() as i32;
+            OverlayMonitor {
+                index,
+                x: left,
+                y: top,
+                width: u32::try_from((right - left).max(1)).unwrap_or(width),
+                height: u32::try_from((bottom - top).max(1)).unwrap_or(height),
+            }
+        })
+        .collect()
+}
+
+fn selection_center_monitor(monitors: &[OverlayMonitor], selection: Rect) -> Option<usize> {
+    let center = Point::new(
+        selection.x.saturating_add((selection.width / 2) as i32),
+        selection.y.saturating_add((selection.height / 2) as i32),
+    );
+    monitors
+        .iter()
+        .find(|monitor| monitor.contains(center))
+        .or_else(|| {
+            monitors
+                .iter()
+                .find(|monitor| monitor.rect().intersect(selection).is_some())
+        })
+        .map(|monitor| monitor.index)
+}
+
+fn draw_dim(ui: &mut egui::Ui, rect: egui::Rect, selection: Option<egui::Rect>) {
     let dim = Color32::from_black_alpha(120);
     let painter = ui.painter();
-    let Some(selection) = selection else {
+    let Some(sel) = selection else {
         painter.rect_filled(rect, 0.0, dim);
         return;
     };
-    let sel = egui::Rect::from_min_size(
-        egui::pos2(selection.x as f32, selection.y as f32),
-        egui::vec2(selection.width as f32, selection.height as f32),
-    );
     painter.rect_filled(
         egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), sel.top())),
         0.0,
@@ -670,14 +985,10 @@ fn draw_dim(ui: &mut egui::Ui, rect: egui::Rect, selection: Option<Rect>) {
     );
 }
 
-fn draw_selection(ui: &mut egui::Ui, selection: Rect) {
-    let rect = egui::Rect::from_min_size(
-        egui::pos2(selection.x as f32, selection.y as f32),
-        egui::vec2(selection.width as f32, selection.height as f32),
-    );
+fn draw_selection(ui: &mut egui::Ui, screen: egui::Rect, rect: egui::Rect) {
+    let painter = ui.painter().with_clip_rect(screen);
     let stroke = Stroke::new(2.0, Color32::from_rgb(80, 160, 255));
-    ui.painter()
-        .rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
+    painter.rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
     for point in [
         rect.left_top(),
         rect.center_top(),
@@ -688,10 +999,8 @@ fn draw_selection(ui: &mut egui::Ui, selection: Rect) {
         rect.center_bottom(),
         rect.right_bottom(),
     ] {
-        ui.painter()
-            .circle_filled(point, 4.0, Color32::from_rgb(80, 160, 255));
-        ui.painter()
-            .circle_stroke(point, 4.0, Stroke::new(1.0, Color32::WHITE));
+        painter.circle_filled(point, 4.0, Color32::from_rgb(80, 160, 255));
+        painter.circle_stroke(point, 4.0, Stroke::new(1.0, Color32::WHITE));
     }
 }
 
@@ -743,9 +1052,13 @@ fn draw_tips(ui: &mut egui::Ui, screen: egui::Rect) {
     }
 }
 
-fn draw_size_badge(ui: &mut egui::Ui, selection: Rect) {
-    let text = format!("{} x {} px", selection.width, selection.height);
-    let pos = egui::pos2(selection.x as f32, (selection.y as f32 - 22.0).max(4.0));
+fn draw_size_badge(ui: &mut egui::Ui, selection: egui::Rect) {
+    let text = format!(
+        "{} x {} px",
+        selection.width().round() as u32,
+        selection.height().round() as u32
+    );
+    let pos = egui::pos2(selection.left(), (selection.top() - 22.0).max(4.0));
     let galley = ui
         .painter()
         .layout_no_wrap(text, egui::FontId::monospace(13.0), Color32::WHITE);
@@ -756,4 +1069,77 @@ fn draw_size_badge(ui: &mut egui::Ui, selection: Rect) {
     ui.painter()
         .rect_filled(bg, 3.0, Color32::from_black_alpha(200));
     ui.painter().galley(pos, galley, Color32::WHITE);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fit_monitors, selection_center_monitor};
+    use cosnip_capture::MonitorInfo;
+    use cosnip_core::Rect;
+
+    fn monitor(x: i32, y: i32, width: u32, height: u32) -> MonitorInfo {
+        MonitorInfo {
+            x,
+            y,
+            width,
+            height,
+            primary: false,
+            name: String::new(),
+        }
+    }
+
+    #[test]
+    fn empty_layout_falls_back_to_the_whole_frame() {
+        let layout = fit_monitors(&[], 1920, 1080);
+        assert_eq!(layout.len(), 1);
+        assert_eq!(layout[0].x, 0);
+        assert_eq!(layout[0].y, 0);
+        assert_eq!(layout[0].width, 1920);
+        assert_eq!(layout[0].height, 1080);
+    }
+
+    #[test]
+    fn two_side_by_side_monitors_split_the_frame() {
+        let layout = fit_monitors(
+            &[monitor(0, 0, 1920, 1080), monitor(1920, 0, 2560, 1440)],
+            4480,
+            1440,
+        );
+        assert_eq!(layout.len(), 2);
+        assert_eq!((layout[0].x, layout[0].width), (0, 1920));
+        assert_eq!((layout[1].x, layout[1].width), (1920, 2560));
+        assert_eq!(layout[0].height, 1080);
+        assert_eq!(layout[1].height, 1440);
+    }
+
+    #[test]
+    fn layout_is_normalized_when_monitors_start_below_zero() {
+        let layout = fit_monitors(&[monitor(-1920, -200, 1920, 1080)], 1920, 1080);
+        assert_eq!(layout[0].x, 0);
+        assert_eq!(layout[0].y, 0);
+        assert_eq!(layout[0].width, 1920);
+        assert_eq!(layout[0].height, 1080);
+    }
+
+    #[test]
+    fn captured_frame_can_be_larger_than_the_logical_layout() {
+        let layout = fit_monitors(
+            &[monitor(0, 0, 960, 540), monitor(960, 0, 960, 540)],
+            3840,
+            2160,
+        );
+        assert_eq!((layout[0].x, layout[0].width), (0, 1920));
+        assert_eq!((layout[1].x, layout[1].width), (1920, 1920));
+    }
+
+    #[test]
+    fn selection_toolbar_uses_the_monitor_holding_the_selection_center() {
+        let layout = fit_monitors(
+            &[monitor(0, 0, 1920, 1080), monitor(1920, 0, 1920, 1080)],
+            3840,
+            1080,
+        );
+        let selection = Rect::new(1750, 100, 400, 300);
+        assert_eq!(selection_center_monitor(&layout, selection), Some(1));
+    }
 }

@@ -61,18 +61,18 @@ path is unverified; `gap` = unresolved; `deferred` = knowingly out of MVP scope.
 - A row is not “implemented” until it has a Cosnip test and parity evidence; this matrix tracks
   the reference baseline, not product progress.
 
-## Cosnip MVP Status (Feature 002)
+## Cosnip Status (Feature 002 + 003)
 
-This table tracks implementation progress, not reference evidence. `parity` means the MVP
-behavior was demonstrated; `partial` means a deliberately reduced subset; `deferred` means a
-later feature; `difference` means an accepted MVP difference.
+This table tracks implementation progress, not reference evidence. `parity` means the behavior was
+demonstrated; `partial` means a deliberately reduced subset; `deferred` means a later feature;
+`difference` means an accepted difference.
 
-| Behavior | MVP status | Notes |
+| Behavior | Status | Notes |
 |---|---|---|
-| BEH-001 X11 capture | parity | Xvfb capture test plus 12–35 ms release capture |
-| BEH-002 backend selection | parity (MVP subset) | X11 and GNOME Screencast only; KDE/portal error |
-| BEH-003 GNOME portal capture | difference | portal blocked; GNOME Screencast fallback used |
-| BEH-006/011 overlay/coverage/focus | parity | 1920x1080 fullscreen, `ABOVE`, `FOCUSED` |
+| BEH-001 X11 capture | parity | Xvfb capture test; 12–35 ms at 1080p, ~0.5 s at 3840x1080 debug |
+| BEH-002 backend selection | parity (MVP subset) | X11 + GNOME Mutter/PipeWire; H.264 fallback; KDE/portal error |
+| BEH-003 GNOME portal capture | difference | Portal blocked/interactive; direct Mutter ScreenCast used instead |
+| BEH-006/011 overlay/coverage/focus | parity | One fullscreen viewport per monitor; global selection coordinates |
 | BEH-007 selection/badge/handles | partial | drag, arrows, square constraint, Ctrl+A; handles are visual, not resize handles |
 | BEH-008 magnifier/color | partial | 11x11 magnifier, coordinates, RGB/HEX; no C/Shift color-copy shortcuts |
 | BEH-009 keyboard tips | partial | overlay tips panel; no window/element detection |
@@ -84,7 +84,7 @@ later feature; `difference` means an accepted MVP difference.
 | BEH-016 pin interactions | partial | drag, wheel zoom, close; no rotate/flip/opacity |
 | BEH-017 native stacking | parity | native screencast shows pin above browser |
 | BEH-018..021 annotations | deferred | next feature |
-| BEH-022 image clipboard | partial | 500x300 read by native Wayland GTK4 after exit; GNOME fallback pixels are lossy H.264 |
+| BEH-022 image clipboard | parity | 500x300 read by native Wayland GTK4 after exit; GNOME capture is now lossless |
 | BEH-023 text/HTML/URI/color clipboard | deferred | later feature |
 | BEH-024..026 hotkeys | deferred | use a desktop shortcut invoking `cosnip snip` |
 | BEH-027..029 CLI | partial | `snip`, `--area`, `--full`, `--delay`, `--copy`, `--save`, `--pin`; other commands later |
@@ -92,6 +92,20 @@ later feature; `difference` means an accepted MVP difference.
 | BEH-032 tray | deferred | no tray in MVP |
 | BEH-033 output | partial | PNG only; JPEG/WebP later |
 | BEH-034/035 hold semantics | difference | MVP always shows overlay; no `--hold` |
-| BEH-041 multi-monitor/DPI | unsupported | explicit error |
-| BEH-042 portal/pure Wayland | unsupported | GNOME Screencast fallback only |
+| BEH-041 multi-monitor/DPI | partial | 1x multi-monitor implemented and simulated (200x50 cross-boundary drag); mixed/fractional DPI pending |
+| BEH-042 portal/pure Wayland | difference | direct Mutter ScreenCast on GNOME; portal and pure-Wayland UI not implemented |
 | BEH-045 pin shadow margin | difference | image-sized pin avoids black margin on depth-24 GL |
+
+### Feature 003 Evidence
+
+| Check | Evidence |
+|---|---|
+| Lossless GNOME capture | raw BGRx 1920x1080 PipeWire frame; `--doctor` reports `gnome-pipewire`; 142–412 ms |
+| No lossy round trip | no `ffmpeg`, no temporary MP4 on the success path |
+| Full-screen output | 1920x1080 PNG saved and visually compared |
+| Tiled wide desktop | 3840x1080 Xvfb with 2048 texture limit; exact 500x300 `--area` crop |
+| Tiled pin | 3840x1080 pin window created on the same 2048-limit stack |
+| Cross-monitor drag | simulated 960+960 layout; 900→1100 drag saved 200x50 |
+| Pin after multi-monitor changes | 500x300 pin at (300,200); Escape closed it |
+| Real dual-monitor hardware | open; see tasks T057–T058 |
+| Mixed/fractional DPI | open; see tasks T059 |

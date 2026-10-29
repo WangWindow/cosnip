@@ -1,4 +1,8 @@
-# CLI Contract: Snipping Overlay MVP
+# CLI Contract
+
+> **Superseded in part by Feature 003**: multi-monitor layouts at scale 1.0 are now supported.
+> The single-monitor rejection described below no longer applies; other Feature 002 behaviors
+> remain in force.: Snipping Overlay MVP
 
 ## Commands
 
