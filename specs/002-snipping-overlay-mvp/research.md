@@ -113,7 +113,9 @@ annotation.
   native desktop content; the temporary capture directory was removed.
 - **Overlay on GNOME**: 1920x1080 depth 32; `_NET_WM_STATE_FULLSCREEN`, `ABOVE`, `FOCUSED`;
   window-targeted and composited-screencast captures show the real desktop, selection, toolbar,
-  magnifier, size badge, and keyboard tips.
+  magnifier, size badge, and keyboard tips. A mouse drag from (100,100) to (600,400) produced an
+  exact 500x300 output; the canvas anchors at the pointer-press frame, not at egui's later drag
+  threshold. Toolbar Copy was exercised with a real synthetic click and exited successfully.
 - **Clipboard**: keeping `ClipboardOwner` alive plus an 800 ms handoff delay let a focused native
   Wayland GTK4 reader read the exact 500x300 image after process exit. Dropping the clipboard owner
   immediately after `set_image` caused a “no compatible transfer format” failure.

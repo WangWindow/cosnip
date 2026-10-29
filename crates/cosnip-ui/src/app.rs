@@ -184,6 +184,7 @@ impl CosnipApp {
         owner.set_image(&image).map_err(|e| e.to_string())?;
         self.clipboard = Some(owner);
         self.outcome.lock().unwrap().copied = true;
+        eprintln!("cosnip: copied selection");
         Ok(())
     }
 
@@ -307,19 +308,27 @@ impl CosnipApp {
 
                 let response =
                     ui.interact(rect, Id::new("overlay-canvas"), Sense::click_and_drag());
-                if response.drag_started()
+                if ctx.input(|i| i.pointer.primary_pressed())
+                    && response.hovered()
                     && let Some(p) = pointer_px
                 {
                     self.drag_anchor = Some(p);
                     self.selection.begin(p);
                 }
-                if response.dragged()
-                    && let (Some(anchor), Some(current)) = (self.drag_anchor, pointer_px)
+                if response.drag_started()
+                    && self.drag_anchor.is_none()
+                    && let Some(p) = pointer_px
+                {
+                    self.drag_anchor = Some(p);
+                    self.selection.begin(p);
+                }
+                if let (Some(anchor), Some(current)) = (self.drag_anchor, pointer_px)
+                    && (response.dragged() || ctx.input(|i| i.pointer.primary_down()))
                 {
                     let square = ctx.input(|i| i.modifiers.shift);
                     self.selection.drag_to(anchor, current, bounds, square);
                 }
-                if response.drag_stopped() {
+                if response.drag_stopped() || ctx.input(|i| i.pointer.any_released()) {
                     self.drag_anchor = None;
                 }
 
