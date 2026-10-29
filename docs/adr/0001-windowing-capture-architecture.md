@@ -1,6 +1,6 @@
 # ADR 0001: XWayland Windowing and Native Capture Architecture
 
-- **Status**: Proposed (pending project-owner review)
+- **Status**: Accepted (project-owner review, 2026-10-29)
 - **Date**: 2026-10-29
 - **Feature**: `001-reference-parity-foundation`
 - **Deciders**: Project owner, implementation team

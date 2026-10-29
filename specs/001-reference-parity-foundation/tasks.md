@@ -77,7 +77,7 @@
 - [x] T037 [US3] Write `docs/adr/0001-windowing-capture-architecture.md`
 - [x] T038 [US3] Record spike results in `contracts/spike-checklist.md`
 - [x] T039 [US3] Record the initial dependency/license table in `docs/dependencies.md`
-- [ ] T040 [US3] Project-owner review and go/no-go sign-off
+- [x] T040 [US3] Project-owner review and go/no-go sign-off (accepted 2026-10-29)
 
 **Checkpoint**: The decision record is ready for the review gate.
 
