@@ -9,14 +9,14 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use cosnip_capture::{CaptureBackendKind, MonitorInfo};
+use cosnip_capture::{CaptureBackendKind, CapturedMonitor, MonitorInfo};
 use cosnip_core::{
     Annotation, AnnotationDocument, AnnotationKind, Frame, Handle, OutputRequest, Point, Rect,
     Selection, Tool,
 };
 use cosnip_imaging::{crop, encode_png, render};
 use cosnip_platform::{
-    ClipboardOwner, atomic_write, default_save_path, global_pointer, primary_button_down,
+    ClipboardOwner, atomic_write, format_file_name, global_pointer, primary_button_down, save_path,
 };
 use eframe::egui;
 use egui::viewport::{ViewportCommand, ViewportId, X11WindowType};
@@ -35,7 +35,40 @@ pub struct UiOptions {
     pub initial_selection: Option<Rect>,
     pub output: OutputRequest,
     pub save_path: Option<PathBuf>,
+    pub save_dir: Option<PathBuf>,
+    pub filename: String,
     pub monitors: Vec<MonitorInfo>,
+    pub native: Vec<CapturedMonitor>,
+    pub style: UiStyle,
+}
+
+#[derive(Clone, Debug)]
+pub struct UiStyle {
+    pub annotation_color: [u8; 4],
+    pub line_width: u32,
+    pub font_size: u32,
+    pub text_shadow: bool,
+    pub cursor_mode: cosnip_platform::CursorMode,
+    pub magnifier: bool,
+    pub show_tips: bool,
+    pub pin_backend: cosnip_platform::PinBackend,
+    pub pin_zoom_step: f32,
+}
+
+impl Default for UiStyle {
+    fn default() -> Self {
+        Self {
+            annotation_color: PALETTE[0],
+            line_width: 3,
+            font_size: 20,
+            text_shadow: true,
+            cursor_mode: cosnip_platform::CursorMode::Auto,
+            magnifier: true,
+            show_tips: true,
+            pin_backend: cosnip_platform::PinBackend::Auto,
+            pin_zoom_step: 0.002,
+        }
+    }
 }
 
 /// A monitor placed in captured-frame pixels and backed by one fullscreen overlay viewport.
@@ -85,7 +118,6 @@ struct TextEditor {
     monitor: usize,
     position: Point,
     text: String,
-    focus_requested: bool,
 }
 
 const PALETTE: [[u8; 4]; 7] = [
@@ -99,6 +131,8 @@ const PALETTE: [[u8; 4]; 7] = [
 ];
 const WIDTHS: [u32; 3] = [1, 3, 6];
 const COLOR_NAMES: [&str; 7] = ["Red", "Amber", "Green", "Blue", "Purple", "White", "Black"];
+const TOOLBAR_BG: Color32 = Color32::from_rgb(236, 236, 236);
+const TOOLBAR_INK: Color32 = Color32::from_rgb(50, 50, 50);
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outcome {
@@ -117,12 +151,12 @@ pub fn run(frame: Frame, options: UiOptions) -> Outcome {
     run_native(app, outcome)
 }
 
-pub fn run_pin(frame: Frame, position: Option<(i32, i32)>) -> Outcome {
+pub fn run_pin(frame: Frame, position: Option<(i32, i32)>, style: UiStyle) -> Outcome {
     let outcome = Arc::new(Mutex::new(Outcome {
         code: 4,
         ..Outcome::default()
     }));
-    let app = CosnipApp::new_pin(frame, position, Arc::clone(&outcome));
+    let app = CosnipApp::new_pin(frame, position, style, Arc::clone(&outcome));
     run_native(app, outcome)
 }
 
@@ -164,6 +198,9 @@ struct CosnipApp {
     selection: Selection,
     output: OutputRequest,
     save_path: Option<PathBuf>,
+    save_dir: Option<PathBuf>,
+    filename: String,
+    native: Vec<CapturedMonitor>,
     overlay_open: bool,
     monitors: Vec<OverlayMonitor>,
     focused_monitor: Option<usize>,
@@ -176,6 +213,13 @@ struct CosnipApp {
     tool: Tool,
     color: [u8; 4],
     line_width: u32,
+    font_size: u32,
+    text_shadow: bool,
+    cursor_mode: cosnip_platform::CursorMode,
+    magnifier: bool,
+    show_tips: bool,
+    pin_backend: cosnip_platform::PinBackend,
+    pin_zoom_step: f32,
     next_number: u32,
     text_editor: Option<TextEditor>,
     pin: Option<Pin>,
@@ -189,7 +233,10 @@ struct CosnipApp {
 }
 
 struct Pin {
-    frame: Frame,
+    width: u32,
+    height: u32,
+    display_width: u32,
+    display_height: u32,
     tiles: Vec<PinTile>,
     position: (f32, f32),
     scale: f32,
@@ -227,12 +274,16 @@ impl CosnipApp {
         let layout = monitor_override().unwrap_or(options.monitors);
         let monitors = fit_monitors(&layout, frame.width(), frame.height());
         let cursor_hidden = vec![false; monitors.len()];
+        let style = options.style;
         Self {
             frame: Arc::new(frame),
             tiles: Vec::new(),
             selection: Selection::new(options.initial_selection),
             output: options.output,
             save_path: options.save_path,
+            save_dir: options.save_dir,
+            filename: options.filename,
+            native: options.native,
             overlay_open: true,
             monitors,
             focused_monitor: None,
@@ -243,8 +294,15 @@ impl CosnipApp {
             annotations: AnnotationDocument::default(),
             draft: None,
             tool: Tool::Select,
-            color: PALETTE[0],
-            line_width: 3,
+            color: style.annotation_color,
+            line_width: style.line_width,
+            font_size: style.font_size,
+            text_shadow: style.text_shadow,
+            cursor_mode: style.cursor_mode,
+            magnifier: style.magnifier,
+            show_tips: style.show_tips,
+            pin_backend: style.pin_backend,
+            pin_zoom_step: style.pin_zoom_step,
             next_number: 1,
             text_editor: None,
             pin: None,
@@ -261,8 +319,13 @@ impl CosnipApp {
         }
     }
 
-    fn new_pin(frame: Frame, position: Option<(i32, i32)>, outcome: Arc<Mutex<Outcome>>) -> Self {
-        let placeholder = Frame::new(1, 1, vec![0, 0, 0, 255]).expect("1x1 frame");
+    fn new_pin(
+        frame: Frame,
+        position: Option<(i32, i32)>,
+        style: UiStyle,
+        outcome: Arc<Mutex<Outcome>>,
+    ) -> Self {
+        let placeholder = placeholder_frame();
         Self {
             frame: Arc::new(placeholder),
             tiles: Vec::new(),
@@ -273,6 +336,9 @@ impl CosnipApp {
                 pin: true,
             },
             save_path: None,
+            save_dir: None,
+            filename: "Cosnip_%Y-%m-%d_%H-%M-%S.png".into(),
+            native: Vec::new(),
             overlay_open: false,
             monitors: Vec::new(),
             focused_monitor: None,
@@ -283,8 +349,15 @@ impl CosnipApp {
             annotations: AnnotationDocument::default(),
             draft: None,
             tool: Tool::Select,
-            color: PALETTE[0],
-            line_width: 3,
+            color: style.annotation_color,
+            line_width: style.line_width,
+            font_size: style.font_size,
+            text_shadow: style.text_shadow,
+            cursor_mode: style.cursor_mode,
+            magnifier: style.magnifier,
+            show_tips: style.show_tips,
+            pin_backend: style.pin_backend,
+            pin_zoom_step: style.pin_zoom_step,
             next_number: 1,
             text_editor: None,
             pin: None,
@@ -309,7 +382,27 @@ impl CosnipApp {
                 .unwrap_or(image_size);
             let (x, y) = clamp_pin_position(position, image_size, desktop);
             let rect = Rect::new(x, y, image.width(), image.height());
-            match create_pin(&cc.egui_ctx, image, rect) {
+            let display = (image.width(), image.height());
+            if self.pin_backend != cosnip_platform::PinBackend::Window {
+                let scale = cc.egui_ctx.pixels_per_point().max(f32::EPSILON);
+                let (sx, sy) = pin_position(rect, scale);
+                match cosnip_platform::shell_pin::pin(&image, sx, sy, 0.0, 0.0) {
+                    Ok(_) => {
+                        self.outcome.lock().unwrap().pinned = true;
+                        self.finish(&cc.egui_ctx, 0);
+                        return self;
+                    }
+                    Err(error) if self.pin_backend == cosnip_platform::PinBackend::Auto => {
+                        eprintln!("cosnip: {error}; using a window pin");
+                    }
+                    Err(error) => {
+                        eprintln!("cosnip: {error}");
+                        self.finish(&cc.egui_ctx, 5);
+                        return self;
+                    }
+                }
+            }
+            match create_pin(&cc.egui_ctx, image, rect, display) {
                 Ok(pin) => {
                     self.pin = Some(pin);
                     self.outcome.lock().unwrap().pinned = true;
@@ -360,6 +453,7 @@ impl CosnipApp {
         self.done = true;
         self.overlay_open = false;
         self.outcome.lock().unwrap().code = code;
+        self.restore_cursor(ctx);
         for monitor in &self.monitors {
             ctx.send_viewport_cmd_to(monitor.viewport(), ViewportCommand::Close);
         }
@@ -371,8 +465,19 @@ impl CosnipApp {
 
     fn close_overlay(&mut self, ctx: &egui::Context) {
         self.overlay_open = false;
+        self.tiles.clear();
+        self.restore_cursor(ctx);
         for monitor in &self.monitors {
             ctx.send_viewport_cmd_to(monitor.viewport(), ViewportCommand::Close);
+        }
+    }
+
+    fn restore_cursor(&mut self, ctx: &egui::Context) {
+        for (index, monitor) in self.monitors.iter().enumerate() {
+            ctx.send_viewport_cmd_to(monitor.viewport(), ViewportCommand::CursorVisible(true));
+            if let Some(hidden) = self.cursor_hidden.get_mut(index) {
+                *hidden = false;
+            }
         }
     }
 
@@ -380,11 +485,53 @@ impl CosnipApp {
         self.selection.rect().filter(|r| !r.is_empty())
     }
 
-    fn rendered_selection(&self) -> Result<(Frame, Rect), String> {
+    fn rendered_selection(&self) -> Result<RenderedSelection, String> {
         let rect = self.selected_rect().ok_or("no selection")?;
+        if let Some((native, scale_x, scale_y)) = self.native.iter().find_map(|native| {
+            native_selection(native, rect).map(|scale| (native, scale.0, scale.1))
+        }) {
+            let monitor = &native.monitor;
+            let origin = Point::new(monitor.x, monitor.y);
+            let local_rect = native_rect(
+                rect,
+                monitor,
+                scale_x,
+                scale_y,
+                (native.width, native.height),
+            );
+            let annotations = self
+                .annotations
+                .items()
+                .iter()
+                .map(|annotation| scale_annotation(annotation, origin, scale_x, scale_y))
+                .collect::<Vec<_>>();
+            let native_frame = native.frame().map_err(|error| error.to_string())?;
+            let image = render(&native_frame, local_rect, &annotations)
+                .map_err(|error| error.to_string())?;
+            return Ok(RenderedSelection {
+                image,
+                rect,
+                display: (rect.width, rect.height),
+            });
+        }
         let image =
             render(&self.frame, rect, self.annotations.items()).map_err(|e| e.to_string())?;
-        Ok((image, rect))
+        Ok(RenderedSelection {
+            image,
+            rect,
+            display: (rect.width, rect.height),
+        })
+    }
+
+    /// Drop the frozen desktop CPU pixels once the output image is rendered.
+    ///
+    /// The GL tiles stay alive while the overlay is still visible (for example during the
+    /// clipboard-owner delay) and are cleared when the overlay is closed.
+    fn release_capture_frame(&mut self) {
+        self.frame = Arc::new(placeholder_frame());
+        self.native.clear();
+        self.draft = None;
+        self.annotations = AnnotationDocument::default();
     }
 
     fn copy_image(&mut self, image: &Frame) -> Result<(), String> {
@@ -401,8 +548,9 @@ impl CosnipApp {
         let path = match explicit {
             Some(path) => path,
             None => {
-                default_save_path(&jiff::Zoned::now().strftime("%Y-%m-%d_%H-%M-%S").to_string())
-                    .map_err(|e| e.to_string())?
+                let now = jiff::Zoned::now();
+                let name = format_file_name(&self.filename, &now);
+                save_path(self.save_dir.as_deref(), &name).map_err(|e| e.to_string())?
             }
         };
         atomic_write(&path, &bytes).map_err(|e| e.to_string())?;
@@ -410,8 +558,34 @@ impl CosnipApp {
         Ok(path)
     }
 
-    fn pin_image(&mut self, ctx: &egui::Context, image: Frame, rect: Rect) -> Result<(), String> {
-        let pin = create_pin(ctx, image, rect)?;
+    fn pin_image(
+        &mut self,
+        ctx: &egui::Context,
+        image: Frame,
+        rect: Rect,
+        display: (u32, u32),
+    ) -> Result<(), String> {
+        // The capture is no longer needed once the pin image is rendered. Free its textures
+        // before uploading the pin textures so both sets are not live at the same time.
+        self.tiles.clear();
+        if self.pin_backend != cosnip_platform::PinBackend::Window {
+            let scale = ctx.pixels_per_point().max(f32::EPSILON);
+            let (x, y) = pin_position(rect, scale);
+            let width = display.0 as f32 / scale;
+            let height = display.1 as f32 / scale;
+            match cosnip_platform::shell_pin::pin(&image, x, y, width, height) {
+                Ok(_) => {
+                    self.outcome.lock().unwrap().pinned = true;
+                    self.finish(ctx, 0);
+                    return Ok(());
+                }
+                Err(error) if self.pin_backend == cosnip_platform::PinBackend::Auto => {
+                    eprintln!("cosnip: {error}; using a window pin");
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        let pin = create_pin(ctx, image, rect, display)?;
         self.pin = Some(pin);
         self.outcome.lock().unwrap().pinned = true;
         self.close_overlay(ctx);
@@ -435,7 +609,7 @@ impl CosnipApp {
             return;
         }
 
-        let (image, rect) = match self.rendered_selection() {
+        let rendered = match self.rendered_selection() {
             Ok(result) => result,
             Err(error) => {
                 eprintln!("cosnip: {error}");
@@ -443,6 +617,9 @@ impl CosnipApp {
                 return;
             }
         };
+        self.release_capture_frame();
+        let image = rendered.image;
+        let rect = rendered.rect;
         if want_copy && let Err(error) = self.copy_image(&image) {
             eprintln!("cosnip: clipboard failed: {error}");
             self.finish(ctx, 5);
@@ -460,7 +637,7 @@ impl CosnipApp {
             }
         }
         if want_pin {
-            if let Err(error) = self.pin_image(ctx, image, rect) {
+            if let Err(error) = self.pin_image(ctx, image, rect, rendered.display) {
                 eprintln!("cosnip: pin failed: {error}");
                 self.finish(ctx, 5);
             }
@@ -513,10 +690,6 @@ impl CosnipApp {
             ctx.send_viewport_cmd(ViewportCommand::Focus);
             self.focused_monitor = Some(monitor.index);
         }
-        if !self.cursor_hidden[monitor.index] {
-            ctx.send_viewport_cmd(ViewportCommand::CursorVisible(false));
-            self.cursor_hidden[monitor.index] = true;
-        }
 
         let response = ui.interact(
             screen,
@@ -525,6 +698,25 @@ impl CosnipApp {
         );
         let text_editing = self.text_editor.is_some();
         let over_chrome = ctx.is_pointer_over_egui();
+        let cursor_on_canvas = pointer_inside && !over_chrome;
+        let hide_cursor = match self.cursor_mode {
+            cosnip_platform::CursorMode::Auto => {
+                cursor_on_canvas && !text_editing && self.tool != Tool::Text
+            }
+            cosnip_platform::CursorMode::Always => false,
+            cosnip_platform::CursorMode::Hidden => cursor_on_canvas && !text_editing,
+        };
+        if hide_cursor && !self.cursor_hidden[monitor.index] {
+            ctx.send_viewport_cmd(ViewportCommand::CursorVisible(false));
+            self.cursor_hidden[monitor.index] = true;
+        } else if !hide_cursor && self.cursor_hidden[monitor.index] {
+            ctx.send_viewport_cmd(ViewportCommand::CursorVisible(true));
+            self.cursor_hidden[monitor.index] = false;
+        }
+        if (text_editing || (self.tool == Tool::Text && !over_chrome)) && !hide_cursor {
+            ctx.set_cursor_icon(egui::CursorIcon::Text);
+        }
+        let show_crosshair = hide_cursor && cursor_on_canvas;
         if ctx.input(|i| i.pointer.primary_pressed())
             && response.hovered()
             && let Some(p) = pointer_global
@@ -609,10 +801,16 @@ impl CosnipApp {
             }
         }
         if let Some(local_pointer) = hover
-            && pointer_inside
-            && !over_chrome
+            && show_crosshair
+            && !text_editing
         {
             draw_crosshair(ui, screen, local_pointer);
+        }
+        if let Some(local_pointer) = hover
+            && cursor_on_canvas
+            && !text_editing
+            && self.magnifier
+        {
             self.draw_magnifier(ui, screen, local_pointer, pointer_global.unwrap());
         }
         if let Some(selection) = selection {
@@ -622,6 +820,15 @@ impl CosnipApp {
             }
             if selection_center_monitor(&self.monitors, selection) == Some(monitor.index) {
                 self.show_toolbar(&ctx, monitor, selection, screen, pixels_per_point);
+            }
+        }
+        if self.show_tips {
+            let tips_monitor = selection
+                .and_then(|selection| selection_center_monitor(&self.monitors, selection))
+                .or(self.focused_monitor)
+                .unwrap_or(0);
+            if tips_monitor == monitor.index {
+                draw_tips(ui, screen);
             }
         }
         self.show_text_editor(ui, monitor, pixels_per_point);
@@ -703,18 +910,11 @@ impl CosnipApp {
         }
 
         match self.tool {
-            Tool::Eraser => {
-                self.annotations.remove_at(point);
-                self.drag_anchor = None;
-                self.drag_monitor = None;
-                self.drag_mode = None;
-            }
             Tool::Text => {
                 self.text_editor = Some(TextEditor {
                     monitor: monitor_index,
                     position: point,
                     text: String::new(),
-                    focus_requested: false,
                 });
                 self.drag_anchor = None;
                 self.drag_monitor = None;
@@ -784,10 +984,13 @@ impl CosnipApp {
                 points: vec![point],
             },
             Tool::Mosaic => AnnotationKind::Mosaic {
-                rect: Rect::new(point.x, point.y, 0, 0),
+                points: vec![point],
             },
             Tool::Blur => AnnotationKind::Blur {
-                rect: Rect::new(point.x, point.y, 0, 0),
+                points: vec![point],
+            },
+            Tool::Eraser => AnnotationKind::Eraser {
+                points: vec![point],
             },
             _ => return None,
         };
@@ -822,10 +1025,7 @@ impl CosnipApp {
                     return;
                 };
                 match &mut draft.kind {
-                    AnnotationKind::Rectangle { rect }
-                    | AnnotationKind::Ellipse { rect }
-                    | AnnotationKind::Mosaic { rect }
-                    | AnnotationKind::Blur { rect } => {
+                    AnnotationKind::Rectangle { rect } | AnnotationKind::Ellipse { rect } => {
                         *rect = if square {
                             Rect::square_from_points(anchor, current)
                         } else {
@@ -837,7 +1037,11 @@ impl CosnipApp {
                     AnnotationKind::Arrow { end, .. } | AnnotationKind::Line { end, .. } => {
                         *end = current;
                     }
-                    AnnotationKind::Pencil { points } | AnnotationKind::Marker { points }
+                    AnnotationKind::Pencil { points }
+                    | AnnotationKind::Marker { points }
+                    | AnnotationKind::Mosaic { points }
+                    | AnnotationKind::Blur { points }
+                    | AnnotationKind::Eraser { points }
                         if points.last().is_none_or(|last| *last != current) =>
                     {
                         points.push(current);
@@ -891,7 +1095,7 @@ impl CosnipApp {
             AnnotationKind::Text {
                 position: editor.position,
                 text: text.to_string(),
-                size: 20,
+                size: self.font_size.max(6),
             },
             self.color,
             self.line_width,
@@ -924,12 +1128,18 @@ impl CosnipApp {
             return;
         }
         let position = self.point_to_local(editor_info.1, monitor, pixels_per_point);
+        let color = Color32::from_rgba_unmultiplied(
+            self.color[0],
+            self.color[1],
+            self.color[2],
+            self.color[3],
+        );
+        let scale = pixels_per_point.max(f32::EPSILON);
+        let font_size = self.font_size.max(6) as f32 / scale;
+        let text_shadow = self.text_shadow;
         let Some(editor) = self.text_editor.as_mut() else {
             return;
         };
-        ui.ctx()
-            .send_viewport_cmd(ViewportCommand::CursorVisible(true));
-        self.cursor_hidden[monitor.index] = false;
         let id = Id::new("cosnip-text-editor");
         let mut commit = false;
         let mut cancel = false;
@@ -937,26 +1147,28 @@ impl CosnipApp {
             .fixed_pos(position)
             .order(Order::Foreground)
             .show(ui.ctx(), |ui| {
-                egui::Frame::NONE
-                    .fill(Color32::from_black_alpha(220))
-                    .inner_margin(egui::Margin::same(4))
-                    .corner_radius(egui::CornerRadius::same(4))
-                    .show(ui, |ui| {
-                        let response = ui.add(
-                            egui::TextEdit::singleline(&mut editor.text)
-                                .desired_width(220.0)
-                                .hint_text("Text"),
-                        );
-                        if !editor.focus_requested {
-                            response.request_focus();
-                            editor.focus_requested = true;
-                        }
-                        ui.label(
-                            egui::RichText::new("Enter place · Esc cancel")
-                                .size(10.0)
-                                .color(Color32::from_gray(190)),
-                        );
-                    });
+                if text_shadow && !editor.text.is_empty() {
+                    ui.painter().text(
+                        ui.next_widget_position() + egui::vec2(1.0, 1.0),
+                        egui::Align2::LEFT_TOP,
+                        &editor.text,
+                        egui::FontId::proportional(font_size),
+                        Color32::from_black_alpha(170),
+                    );
+                }
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut editor.text)
+                        .frame(egui::Frame::NONE)
+                        .margin(egui::Margin::ZERO)
+                        .background_color(Color32::TRANSPARENT)
+                        .text_color(color)
+                        .font(egui::FontId::proportional(font_size))
+                        .desired_width(220.0)
+                        .hint_text("Text"),
+                );
+                if !response.has_focus() {
+                    response.request_focus();
+                }
             });
         if ui.ctx().input(|i| i.key_pressed(Key::Enter)) {
             commit = true;
@@ -986,7 +1198,9 @@ impl CosnipApp {
             annotation.color[2],
             annotation.color[3],
         );
-        let width = annotation.width.max(1) as f32;
+        let scale = pixels_per_point.max(f32::EPSILON);
+        let width_px = annotation.width.max(1) as f32;
+        let width = width_px / scale;
         let stroke = Stroke::new(width, color);
         match &annotation.kind {
             AnnotationKind::Rectangle { rect } => {
@@ -1006,7 +1220,7 @@ impl CosnipApp {
                 let end = self.point_to_local(*end, monitor, pixels_per_point);
                 painter.line_segment([start, end], stroke);
                 let angle = (end.y - start.y).atan2(end.x - start.x);
-                let length = (12.0 + width * 2.0).min(40.0);
+                let length = (12.0 + width_px * 2.0).min(40.0) / scale;
                 for spread in [-0.5, 0.5] {
                     let tip = end
                         - egui::vec2(
@@ -1030,7 +1244,7 @@ impl CosnipApp {
             }
             AnnotationKind::Marker { points } => {
                 let marker = Stroke::new(
-                    (width * 4.0).max(4.0),
+                    (width_px * 4.0).max(4.0) / scale,
                     Color32::from_rgba_unmultiplied(
                         annotation.color[0],
                         annotation.color[1],
@@ -1050,38 +1264,50 @@ impl CosnipApp {
                     position,
                     egui::Align2::LEFT_TOP,
                     text,
-                    egui::FontId::proportional(*size as f32),
+                    egui::FontId::proportional(*size as f32 / scale),
                     color,
                 );
             }
             AnnotationKind::Number { position, value } => {
                 let position = self.point_to_local(*position, monitor, pixels_per_point);
-                let radius = (14.0 + width).clamp(12.0, 24.0);
+                let radius_px = (14.0 + width_px).clamp(12.0, 24.0);
+                let radius = radius_px / scale;
                 painter.circle_filled(position, radius, color);
                 painter.text(
                     position,
                     egui::Align2::CENTER_CENTER,
                     value.to_string(),
-                    egui::FontId::proportional(radius * 1.4),
+                    egui::FontId::proportional((radius_px * 2.0).max(14.0) / scale),
                     Color32::WHITE,
                 );
             }
-            AnnotationKind::Mosaic { rect } => {
-                self.draw_block_effect_preview(
+            AnnotationKind::Mosaic { points } => {
+                self.draw_stroke_effect_preview(
                     &painter,
                     monitor,
                     pixels_per_point,
-                    *rect,
+                    points,
+                    annotation.kind.brush_radius(annotation.width),
                     (annotation.width * 4).max(8),
                 );
             }
-            AnnotationKind::Blur { rect } => {
-                self.draw_block_effect_preview(
+            AnnotationKind::Blur { points } => {
+                self.draw_stroke_effect_preview(
                     &painter,
                     monitor,
                     pixels_per_point,
-                    *rect,
+                    points,
+                    annotation.kind.brush_radius(annotation.width),
                     (annotation.width * 2).max(3),
+                );
+            }
+            AnnotationKind::Eraser { points } => {
+                self.draw_eraser_preview(
+                    &painter,
+                    monitor,
+                    pixels_per_point,
+                    points,
+                    annotation.kind.brush_radius(annotation.width),
                 );
             }
             AnnotationKind::Magnifier { .. } => {
@@ -1095,14 +1321,20 @@ impl CosnipApp {
         }
     }
 
-    fn draw_block_effect_preview(
+    fn draw_stroke_effect_preview(
         &self,
         painter: &egui::Painter,
         monitor: &OverlayMonitor,
         pixels_per_point: f32,
-        rect: Rect,
+        points: &[Point],
+        radius: i32,
         requested_block: u32,
     ) {
+        let bounds = Rect::new(0, 0, self.frame.width(), self.frame.height());
+        let Some(mask) = cosnip_core::stroke_mask(points, radius, bounds) else {
+            return;
+        };
+        let rect = mask.rect();
         let mut block = requested_block.max(2);
         let mut columns = rect.width / block + 1;
         let mut rows = rect.height / block + 1;
@@ -1113,19 +1345,56 @@ impl CosnipApp {
         }
         let mut y = rect.y;
         while y < rect.bottom() {
-            let mut x = rect.x;
             let height = block.min((rect.bottom() - y).max(1) as u32);
+            let mut x = rect.x;
             while x < rect.right() {
                 let width = block.min((rect.right() - x).max(1) as u32);
-                let sample_x = x + width as i32 / 2;
-                let sample_y = y + height as i32 / 2;
-                let color = self
-                    .frame
-                    .pixel(sample_x, sample_y)
-                    .map_or(Color32::BLACK, |p| Color32::from_rgb(p[0], p[1], p[2]));
                 let cell = Rect::new(x, y, width, height);
-                let local = self.global_to_local(cell, monitor, pixels_per_point);
-                painter.rect_filled(local, 0.0, color);
+                if mask.any_in(cell) {
+                    let sample = self
+                        .frame
+                        .pixel(x + width as i32 / 2, y + height as i32 / 2)
+                        .map_or(Color32::BLACK, |p| Color32::from_rgb(p[0], p[1], p[2]));
+                    let local = self.global_to_local(cell, monitor, pixels_per_point);
+                    painter.rect_filled(local, 0.0, sample);
+                }
+                x += block as i32;
+            }
+            y += block as i32;
+        }
+    }
+
+    fn draw_eraser_preview(
+        &self,
+        painter: &egui::Painter,
+        monitor: &OverlayMonitor,
+        pixels_per_point: f32,
+        points: &[Point],
+        radius: i32,
+    ) {
+        let bounds = Rect::new(0, 0, self.frame.width(), self.frame.height());
+        let Some(mask) = cosnip_core::stroke_mask(points, radius, bounds) else {
+            return;
+        };
+        let rect = mask.rect();
+        let block = 3;
+        let mut y = rect.y;
+        while y < rect.bottom() {
+            let height = block.min((rect.bottom() - y).max(1) as u32);
+            let mut x = rect.x;
+            while x < rect.right() {
+                let width = block.min((rect.right() - x).max(1) as u32);
+                let cell = Rect::new(x, y, width, height);
+                if mask.any_in(cell) {
+                    let sample = self
+                        .frame
+                        .pixel(x + width as i32 / 2, y + height as i32 / 2)
+                        .map_or(Color32::BLACK, |p| {
+                            Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3])
+                        });
+                    let local = self.global_to_local(cell, monitor, pixels_per_point);
+                    painter.rect_filled(local, 0.0, sample);
+                }
                 x += block as i32;
             }
             y += block as i32;
@@ -1158,6 +1427,7 @@ impl CosnipApp {
         );
         let width = annotation.width.max(1) as f32;
         let scale = pixels_per_point.max(f32::EPSILON);
+        let stroke_width = (width / scale).max(0.5);
         let center_local = self.point_to_local(center, monitor, pixels_per_point);
         let radius_local = radius as f32 / scale;
         let cell = 4.0_f32;
@@ -1190,32 +1460,44 @@ impl CosnipApp {
             }
             y += cell;
         }
-        painter.circle_stroke(
-            center_local,
-            radius_local,
-            Stroke::new(width.max(2.0), color),
-        );
+        painter.circle_stroke(center_local, radius_local, Stroke::new(stroke_width, color));
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context, bounds: Rect) {
-        let (escape, enter, ctrl_c, ctrl_s, ctrl_a, pin_key, undo, redo, left, right, up, down) =
-            ctx.input(|i| {
-                (
-                    i.key_pressed(Key::Escape),
-                    i.key_pressed(Key::Enter),
-                    i.modifiers.command && i.key_pressed(Key::C),
-                    i.modifiers.command && i.key_pressed(Key::S),
-                    i.modifiers.command && i.key_pressed(Key::A),
-                    i.key_pressed(Key::P),
-                    i.modifiers.command && i.key_pressed(Key::Z) && !i.modifiers.shift,
-                    i.modifiers.command
-                        && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z))),
-                    i.key_pressed(Key::ArrowLeft),
-                    i.key_pressed(Key::ArrowRight),
-                    i.key_pressed(Key::ArrowUp),
-                    i.key_pressed(Key::ArrowDown),
-                )
-            });
+        let (
+            escape,
+            enter,
+            ctrl_c,
+            ctrl_s,
+            ctrl_a,
+            pin_key,
+            number_key,
+            magnifier_key,
+            undo,
+            redo,
+            left,
+            right,
+            up,
+            down,
+        ) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::Escape),
+                i.key_pressed(Key::Enter),
+                i.modifiers.command && i.key_pressed(Key::C),
+                i.modifiers.command && i.key_pressed(Key::S),
+                i.modifiers.command && i.key_pressed(Key::A),
+                i.key_pressed(Key::P),
+                !i.modifiers.command && i.key_pressed(Key::N),
+                !i.modifiers.command && i.key_pressed(Key::G),
+                i.modifiers.command && i.key_pressed(Key::Z) && !i.modifiers.shift,
+                i.modifiers.command
+                    && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z))),
+                i.key_pressed(Key::ArrowLeft),
+                i.key_pressed(Key::ArrowRight),
+                i.key_pressed(Key::ArrowUp),
+                i.key_pressed(Key::ArrowDown),
+            )
+        });
         if escape {
             if self.cancel_drag() {
                 return;
@@ -1231,6 +1513,62 @@ impl CosnipApp {
         }
         if ctrl_a {
             self.selection.full(bounds);
+        }
+        if number_key {
+            self.set_tool(Tool::Number);
+        }
+        if magnifier_key {
+            self.set_tool(Tool::Magnifier);
+        }
+        let (
+            rect_key,
+            ellipse_key,
+            arrow_key,
+            pencil_key,
+            marker_key,
+            mosaic_key,
+            text_key,
+            eraser_key,
+            select_key,
+        ) = ctx.input(|i| {
+            (
+                !i.modifiers.command && i.key_pressed(Key::R),
+                !i.modifiers.command && i.key_pressed(Key::C),
+                !i.modifiers.command && i.key_pressed(Key::A),
+                !i.modifiers.command && i.key_pressed(Key::B),
+                !i.modifiers.command && i.key_pressed(Key::H),
+                !i.modifiers.command && i.key_pressed(Key::M),
+                !i.modifiers.command && i.key_pressed(Key::T),
+                !i.modifiers.command && i.key_pressed(Key::E),
+                !i.modifiers.command && i.key_pressed(Key::V),
+            )
+        });
+        if rect_key {
+            self.set_tool(Tool::Rectangle);
+        }
+        if ellipse_key {
+            self.set_tool(Tool::Ellipse);
+        }
+        if arrow_key {
+            self.set_tool(Tool::Arrow);
+        }
+        if pencil_key {
+            self.set_tool(Tool::Pencil);
+        }
+        if marker_key {
+            self.set_tool(Tool::Marker);
+        }
+        if mosaic_key {
+            self.set_tool(Tool::Mosaic);
+        }
+        if text_key {
+            self.set_tool(Tool::Text);
+        }
+        if eraser_key {
+            self.set_tool(Tool::Eraser);
+        }
+        if select_key {
+            self.set_tool(Tool::Select);
         }
         if left || right || up || down {
             let dx = i32::from(right) - i32::from(left);
@@ -1257,9 +1595,9 @@ impl CosnipApp {
         pixels_per_point: f32,
     ) {
         let local = self.global_to_local(selection, monitor, pixels_per_point);
-        let width = 760.0;
-        let height = 40.0;
-        let x = local.left().clamp(
+        let width = 414.0;
+        let height = 30.0;
+        let x = (local.center().x - width / 2.0).clamp(
             screen.left() + 4.0,
             (screen.right() - width - 4.0).max(screen.left() + 4.0),
         );
@@ -1272,45 +1610,104 @@ impl CosnipApp {
             .order(Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::NONE
-                    .fill(Color32::from_rgba_unmultiplied(24, 24, 28, 232))
-                    .stroke(Stroke::new(1.0, Color32::from_white_alpha(22)))
-                    .inner_margin(egui::Margin::symmetric(6, 5))
-                    .corner_radius(egui::CornerRadius::same(8))
+                    .fill(TOOLBAR_BG)
+                    .stroke(Stroke::new(1.0, Color32::from_black_alpha(40)))
+                    .inner_margin(egui::Margin::symmetric(5, 0))
+                    .corner_radius(egui::CornerRadius::same(4))
                     .show(ui, |ui| {
                         ui.set_max_width(width);
-                        ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
                         ui.horizontal(|ui| {
-                            for tool in Tool::ALL {
-                                let response = icon_button(
-                                    ui,
-                                    tool_icon(tool),
-                                    self.tool == tool,
-                                    true,
-                                    &format!("{}\n{}", tool.label(), tool_hint(tool)),
-                                );
-                                if response.clicked() {
-                                    self.set_tool(tool);
-                                }
+                            let shapes_active =
+                                matches!(self.tool, Tool::Rectangle | Tool::Ellipse | Tool::Line);
+                            let response = icon_button(
+                                ui,
+                                Icon::Shapes,
+                                shapes_active,
+                                true,
+                                "Shapes: rectangle → ellipse → line\nClick to cycle · right-click for style",
+                            );
+                            if response.clicked() {
+                                self.set_tool(next_shape_tool(self.tool));
                             }
-                            toolbar_separator(ui);
-                            for (color, name) in PALETTE.iter().zip(COLOR_NAMES) {
-                                if color_button(ui, *color, self.color == *color, name).clicked() {
-                                    self.color = *color;
-                                }
+                            toolbar_style_on_right_click(
+                                &response,
+                                &mut self.color,
+                                &mut self.line_width,
+                            );
+
+                            let arrow = icon_button(ui, Icon::Arrow, self.tool == Tool::Arrow, true, "Arrow");
+                            if arrow.clicked() {
+                                self.set_tool(Tool::Arrow);
                             }
-                            toolbar_separator(ui);
-                            for width in WIDTHS {
-                                let response = icon_button(
-                                    ui,
-                                    Icon::Stroke(width),
-                                    self.line_width == width,
-                                    true,
-                                    &format!("{width} px stroke"),
-                                );
-                                if response.clicked() {
-                                    self.line_width = width;
-                                }
+                            toolbar_style_on_right_click(
+                                &arrow,
+                                &mut self.color,
+                                &mut self.line_width,
+                            );
+
+                            let pencil = icon_button(ui, Icon::Pencil, self.tool == Tool::Pencil, true, "Pencil");
+                            if pencil.clicked() {
+                                self.set_tool(Tool::Pencil);
                             }
+                            toolbar_style_on_right_click(
+                                &pencil,
+                                &mut self.color,
+                                &mut self.line_width,
+                            );
+
+                            let marker = icon_button(ui, Icon::Marker, self.tool == Tool::Marker, true, "Highlighter");
+                            if marker.clicked() {
+                                self.set_tool(Tool::Marker);
+                            }
+                            toolbar_style_on_right_click(
+                                &marker,
+                                &mut self.color,
+                                &mut self.line_width,
+                            );
+
+                            let mosaic_active = matches!(self.tool, Tool::Mosaic | Tool::Blur);
+                            let mosaic = icon_button(
+                                ui,
+                                Icon::Mosaic,
+                                mosaic_active,
+                                true,
+                                "Mosaic: mosaic → blur\nClick to cycle · width sets the brush size",
+                            );
+                            if mosaic.clicked() {
+                                self.set_tool(if self.tool == Tool::Mosaic {
+                                    Tool::Blur
+                                } else {
+                                    Tool::Mosaic
+                                });
+                            }
+                            toolbar_style_on_right_click(
+                                &mosaic,
+                                &mut self.color,
+                                &mut self.line_width,
+                            );
+
+                            let text = icon_button(ui, Icon::Text, self.tool == Tool::Text, true, "Text");
+                            if text.clicked() {
+                                self.set_tool(Tool::Text);
+                            }
+                            toolbar_style_on_right_click(
+                                &text,
+                                &mut self.color,
+                                &mut self.line_width,
+                            );
+
+                            let eraser = icon_button(
+                                ui,
+                                Icon::Eraser,
+                                self.tool == Tool::Eraser,
+                                true,
+                                "Eraser: drag to erase parts of annotations\nWidth sets the brush size",
+                            );
+                            if eraser.clicked() {
+                                self.set_tool(Tool::Eraser);
+                            }
+
                             toolbar_separator(ui);
                             let can_undo = self.annotations.can_undo();
                             if icon_button(ui, Icon::Undo, false, can_undo, "Undo (Ctrl+Z)")
@@ -1327,20 +1724,20 @@ impl CosnipApp {
                                 self.annotations.redo();
                             }
                             toolbar_separator(ui);
-                            if icon_button(ui, Icon::Copy, false, true, "Copy (Enter / Ctrl+C)")
-                                .clicked()
+                            if icon_button(ui, Icon::Cancel, false, true, "Cancel (Esc)").clicked()
                             {
-                                self.confirm(ui.ctx(), Action::Copy);
-                            }
-                            if icon_button(ui, Icon::Save, false, true, "Save (Ctrl+S)").clicked() {
-                                self.confirm(ui.ctx(), Action::Save);
+                                self.finish(ui.ctx(), 6);
                             }
                             if icon_button(ui, Icon::Pin, false, true, "Pin (P)").clicked() {
                                 self.confirm(ui.ctx(), Action::Pin);
                             }
-                            if icon_button(ui, Icon::Cancel, false, true, "Cancel (Esc)").clicked()
+                            if icon_button(ui, Icon::Save, false, true, "Save (Ctrl+S)").clicked() {
+                                self.confirm(ui.ctx(), Action::Save);
+                            }
+                            if icon_button(ui, Icon::Copy, false, true, "Copy (Enter / Ctrl+C)")
+                                .clicked()
                             {
-                                self.finish(ui.ctx(), 6);
+                                self.confirm(ui.ctx(), Action::Copy);
                             }
                         });
                     });
@@ -1410,11 +1807,12 @@ impl CosnipApp {
     }
 
     fn show_pin(&mut self, ctx: &egui::Context) {
+        let zoom_step = self.pin_zoom_step;
         let Some(pin) = self.pin.as_mut() else { return };
         let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
         let base = egui::vec2(
-            pin.frame.width() as f32 / pixels_per_point,
-            pin.frame.height() as f32 / pixels_per_point,
+            pin.display_width as f32 / pixels_per_point,
+            pin.display_height as f32 / pixels_per_point,
         );
         let size = base * pin.scale;
         let builder = egui::ViewportBuilder::default()
@@ -1428,17 +1826,19 @@ impl CosnipApp {
             .with_inner_size([size.x, size.y])
             .with_has_shadow(false);
         let viewport = pin.viewport;
+        let scale_x = pin.display_width as f32 / pin.width.max(1) as f32;
+        let scale_y = pin.display_height as f32 / pin.height.max(1) as f32;
         let tiles = pin
             .tiles
             .iter()
             .map(|tile| {
                 let min = egui::pos2(
-                    tile.x as f32 * pin.scale / pixels_per_point,
-                    tile.y as f32 * pin.scale / pixels_per_point,
+                    tile.x as f32 * pin.scale * scale_x / pixels_per_point,
+                    tile.y as f32 * pin.scale * scale_y / pixels_per_point,
                 );
                 let max = egui::pos2(
-                    (tile.x + tile.width as i32) as f32 * pin.scale / pixels_per_point,
-                    (tile.y + tile.height as i32) as f32 * pin.scale / pixels_per_point,
+                    (tile.x + tile.width as i32) as f32 * pin.scale * scale_x / pixels_per_point,
+                    (tile.y + tile.height as i32) as f32 * pin.scale * scale_y / pixels_per_point,
                 );
                 (tile.texture.id(), egui::Rect::from_min_max(min, max))
             })
@@ -1497,7 +1897,7 @@ impl CosnipApp {
             }
             let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
             if scroll.abs() > 0.1 {
-                new_scale = (new_scale * (1.0 + scroll * 0.002)).clamp(0.1, 5.0);
+                new_scale = (new_scale * (1.0 + scroll * zoom_step)).clamp(0.1, 5.0);
                 ctx.send_viewport_cmd(ViewportCommand::InnerSize(base_size * new_scale));
             }
             // A visible close affordance for windows without keyboard focus.
@@ -1594,7 +1994,143 @@ fn texture_tile_size(ctx: &egui::Context) -> u32 {
     ctx.input(|i| i.max_texture_side).clamp(64, 2048) as u32
 }
 
-fn create_pin(ctx: &egui::Context, image: Frame, rect: Rect) -> Result<Pin, String> {
+struct RenderedSelection {
+    image: Frame,
+    rect: Rect,
+    display: (u32, u32),
+}
+
+fn native_selection(native: &CapturedMonitor, rect: Rect) -> Option<(f32, f32)> {
+    let monitor = &native.monitor;
+    if rect.x < monitor.x
+        || rect.y < monitor.y
+        || rect.right() > monitor.x.saturating_add(monitor.width as i32)
+        || rect.bottom() > monitor.y.saturating_add(monitor.height as i32)
+    {
+        return None;
+    }
+    let scale_x = native.width as f32 / monitor.width as f32;
+    let scale_y = native.height as f32 / monitor.height as f32;
+    (scale_x > 0.0 && scale_y > 0.0).then_some((scale_x, scale_y))
+}
+
+fn native_rect(
+    rect: Rect,
+    monitor: &MonitorInfo,
+    scale_x: f32,
+    scale_y: f32,
+    frame_size: (u32, u32),
+) -> Rect {
+    let x = ((rect.x - monitor.x) as f32 * scale_x).round() as i32;
+    let y = ((rect.y - monitor.y) as f32 * scale_y).round() as i32;
+    let width = (rect.width as f32 * scale_x).round().max(1.0) as u32;
+    let height = (rect.height as f32 * scale_y).round().max(1.0) as u32;
+    let width = width
+        .min(frame_size.0.saturating_sub(x.max(0) as u32))
+        .max(1);
+    let height = height
+        .min(frame_size.1.saturating_sub(y.max(0) as u32))
+        .max(1);
+    Rect::new(x, y, width, height)
+}
+
+fn scale_annotation(
+    annotation: &Annotation,
+    origin: Point,
+    scale_x: f32,
+    scale_y: f32,
+) -> Annotation {
+    let scale = ((scale_x + scale_y) / 2.0).max(f32::EPSILON);
+    let map_point = |point: Point| {
+        Point::new(
+            (((point.x - origin.x) as f32) * scale_x).round() as i32,
+            (((point.y - origin.y) as f32) * scale_y).round() as i32,
+        )
+    };
+    let rect = |rect: Rect| {
+        let left = (((rect.x - origin.x) as f32) * scale_x).round() as i32;
+        let top = (((rect.y - origin.y) as f32) * scale_y).round() as i32;
+        Rect::new(
+            left,
+            top,
+            (rect.width as f32 * scale_x).round().max(1.0) as u32,
+            (rect.height as f32 * scale_y).round().max(1.0) as u32,
+        )
+    };
+    let kind = match &annotation.kind {
+        AnnotationKind::Rectangle { rect: value } => {
+            AnnotationKind::Rectangle { rect: rect(*value) }
+        }
+        AnnotationKind::Ellipse { rect: value } => AnnotationKind::Ellipse { rect: rect(*value) },
+        AnnotationKind::Arrow { start, end } => AnnotationKind::Arrow {
+            start: map_point(*start),
+            end: map_point(*end),
+        },
+        AnnotationKind::Line { start, end } => AnnotationKind::Line {
+            start: map_point(*start),
+            end: map_point(*end),
+        },
+        AnnotationKind::Pencil { points } => AnnotationKind::Pencil {
+            points: points
+                .iter()
+                .map(|point_value| map_point(*point_value))
+                .collect(),
+        },
+        AnnotationKind::Marker { points } => AnnotationKind::Marker {
+            points: points
+                .iter()
+                .map(|point_value| map_point(*point_value))
+                .collect(),
+        },
+        AnnotationKind::Text {
+            position,
+            text,
+            size,
+        } => AnnotationKind::Text {
+            position: map_point(*position),
+            text: text.clone(),
+            size: (*size as f32 * scale).round().max(6.0) as u32,
+        },
+        AnnotationKind::Number { position, value } => AnnotationKind::Number {
+            position: map_point(*position),
+            value: *value,
+        },
+        AnnotationKind::Mosaic { points } => AnnotationKind::Mosaic {
+            points: points.iter().map(|value| map_point(*value)).collect(),
+        },
+        AnnotationKind::Blur { points } => AnnotationKind::Blur {
+            points: points.iter().map(|value| map_point(*value)).collect(),
+        },
+        AnnotationKind::Eraser { points } => AnnotationKind::Eraser {
+            points: points.iter().map(|value| map_point(*value)).collect(),
+        },
+        AnnotationKind::Magnifier {
+            center,
+            radius,
+            zoom,
+        } => AnnotationKind::Magnifier {
+            center: map_point(*center),
+            radius: (*radius as f32 * scale).round().max(8.0) as u32,
+            zoom: *zoom,
+        },
+    };
+    Annotation::new(
+        kind,
+        annotation.color,
+        (annotation.width as f32 * scale).round().max(1.0) as u32,
+    )
+}
+
+fn placeholder_frame() -> Frame {
+    Frame::new(1, 1, vec![0, 0, 0, 255]).expect("1x1 frame")
+}
+
+fn create_pin(
+    ctx: &egui::Context,
+    image: Frame,
+    rect: Rect,
+    display: (u32, u32),
+) -> Result<Pin, String> {
     let mut tiles = Vec::new();
     let max_side = texture_tile_size(ctx);
     for y in (0..image.height()).step_by(max_side as usize) {
@@ -1617,7 +2153,10 @@ fn create_pin(ctx: &egui::Context, image: Frame, rect: Rect) -> Result<Pin, Stri
     }
     let position = pin_position(rect, ctx.pixels_per_point());
     Ok(Pin {
-        frame: image,
+        width: image.width(),
+        height: image.height(),
+        display_width: display.0,
+        display_height: display.1,
         tiles,
         position,
         scale: 1.0,
@@ -1734,49 +2273,13 @@ fn selection_center_monitor(monitors: &[OverlayMonitor], selection: Rect) -> Opt
 
 fn draft_is_valid(annotation: &Annotation) -> bool {
     match &annotation.kind {
-        AnnotationKind::Rectangle { rect }
-        | AnnotationKind::Ellipse { rect }
-        | AnnotationKind::Mosaic { rect }
-        | AnnotationKind::Blur { rect } => !rect.is_empty(),
+        AnnotationKind::Rectangle { rect } | AnnotationKind::Ellipse { rect } => !rect.is_empty(),
+        AnnotationKind::Mosaic { points }
+        | AnnotationKind::Blur { points }
+        | AnnotationKind::Eraser { points } => points.len() >= 2,
         AnnotationKind::Arrow { start, end } | AnnotationKind::Line { start, end } => start != end,
         AnnotationKind::Pencil { points } | AnnotationKind::Marker { points } => points.len() >= 2,
         _ => false,
-    }
-}
-
-fn tool_hint(tool: Tool) -> &'static str {
-    match tool {
-        Tool::Select => "Select, move, or resize the region",
-        Tool::Rectangle => "Drag a rectangle",
-        Tool::Ellipse => "Drag an ellipse",
-        Tool::Arrow => "Drag an arrow",
-        Tool::Line => "Drag a line",
-        Tool::Pencil => "Draw freehand",
-        Tool::Marker => "Draw a translucent highlighter stroke",
-        Tool::Text => "Click to place text",
-        Tool::Number => "Click to place the next number",
-        Tool::Mosaic => "Drag to pixelate",
-        Tool::Blur => "Drag to blur",
-        Tool::Magnifier => "Click to add a magnifier",
-        Tool::Eraser => "Click an annotation to erase it",
-    }
-}
-
-fn tool_icon(tool: Tool) -> Icon {
-    match tool {
-        Tool::Select => Icon::Select,
-        Tool::Rectangle => Icon::Rectangle,
-        Tool::Ellipse => Icon::Ellipse,
-        Tool::Arrow => Icon::Arrow,
-        Tool::Line => Icon::Line,
-        Tool::Pencil => Icon::Pencil,
-        Tool::Marker => Icon::Marker,
-        Tool::Text => Icon::Text,
-        Tool::Number => Icon::Number,
-        Tool::Mosaic => Icon::Mosaic,
-        Tool::Blur => Icon::Blur,
-        Tool::Magnifier => Icon::Magnifier,
-        Tool::Eraser => Icon::Eraser,
     }
 }
 
@@ -1787,26 +2290,61 @@ fn icon_button(
     enabled: bool,
     tooltip: &str,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), Sense::click());
     let background = if active {
         Some(Color32::from_rgb(52, 104, 178))
     } else if enabled && response.hovered() {
-        Some(Color32::from_white_alpha(18))
+        Some(Color32::from_black_alpha(22))
     } else {
         None
     };
     if let Some(background) = background {
-        ui.painter().rect_filled(rect, 4.0, background);
+        ui.painter().rect_filled(rect.shrink(2.0), 4.0, background);
     }
     let color = if !enabled {
-        Color32::from_gray(96)
+        Color32::from_gray(125)
     } else if active {
         Color32::WHITE
     } else {
-        Color32::from_gray(220)
+        TOOLBAR_INK
     };
-    icons::paint(ui.painter(), rect.shrink(4.0), icon, color);
+    icons::paint(ui.painter(), rect.shrink(5.0), icon, color);
     response.on_hover_text(tooltip)
+}
+
+fn toolbar_style_on_right_click(response: &egui::Response, color: &mut [u8; 4], width: &mut u32) {
+    egui::Popup::context_menu(response).show(|ui| {
+        ui.label(egui::RichText::new("Color").strong());
+        ui.horizontal(|ui| {
+            for (swatch, name) in PALETTE.iter().zip(COLOR_NAMES) {
+                if color_button(ui, *swatch, *color == *swatch, name).clicked() {
+                    *color = *swatch;
+                    ui.close();
+                }
+            }
+        });
+        ui.separator();
+        ui.label(egui::RichText::new("Stroke width").strong());
+        ui.horizontal(|ui| {
+            for value in WIDTHS {
+                if ui
+                    .selectable_label(*width == value, format!("{value} px"))
+                    .clicked()
+                {
+                    *width = value;
+                    ui.close();
+                }
+            }
+        });
+    });
+}
+
+fn next_shape_tool(tool: Tool) -> Tool {
+    match tool {
+        Tool::Rectangle => Tool::Ellipse,
+        Tool::Ellipse => Tool::Line,
+        _ => Tool::Rectangle,
+    }
 }
 
 fn color_button(ui: &mut egui::Ui, color: [u8; 4], selected: bool, name: &str) -> egui::Response {
@@ -1817,11 +2355,11 @@ fn color_button(ui: &mut egui::Ui, color: [u8; 4], selected: bool, name: &str) -
         Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
     );
     let border = if selected {
-        Color32::WHITE
+        Color32::from_rgb(52, 104, 178)
     } else if response.hovered() {
-        Color32::from_white_alpha(150)
+        Color32::from_black_alpha(120)
     } else {
-        Color32::from_white_alpha(45)
+        Color32::from_black_alpha(55)
     };
     ui.painter().rect_stroke(
         rect.expand(0.5),
@@ -1836,7 +2374,7 @@ fn toolbar_separator(ui: &mut egui::Ui) {
     ui.add_space(3.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 18.0), Sense::hover());
     ui.painter()
-        .rect_filled(rect, 0.0, Color32::from_white_alpha(34));
+        .rect_filled(rect, 0.0, Color32::from_black_alpha(45));
     ui.add_space(3.0);
 }
 
@@ -1939,6 +2477,79 @@ fn draw_crosshair(ui: &mut egui::Ui, rect: egui::Rect, pointer: egui::Pos2) {
     );
 }
 
+fn draw_tips(ui: &mut egui::Ui, screen: egui::Rect) {
+    const ROWS: [(&str, &str); 8] = [
+        ("Shift", "Keep a square"),
+        ("Enter / Ctrl+C", "Copy"),
+        ("Ctrl+S", "Save"),
+        ("P", "Pin"),
+        ("N / G", "Number / Magnifier"),
+        ("Ctrl+Z", "Undo"),
+        ("Ctrl+A", "Select all"),
+        ("Esc", "Cancel"),
+    ];
+    let painter = ui.painter();
+    let key_font = egui::FontId::monospace(11.0);
+    let text_font = egui::FontId::proportional(11.0);
+    let key_pad = egui::vec2(5.0, 1.0);
+    let row_height = 18.0;
+    let gap = 8.0;
+    let padding = 8.0;
+    let galleys = ROWS
+        .iter()
+        .map(|(key, text)| {
+            (
+                painter.layout_no_wrap((*key).to_owned(), key_font.clone(), Color32::WHITE),
+                painter.layout_no_wrap(
+                    (*text).to_owned(),
+                    text_font.clone(),
+                    Color32::from_white_alpha(220),
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    let key_width = galleys
+        .iter()
+        .map(|(key, _)| key.size().x + key_pad.x * 2.0)
+        .fold(0.0, f32::max);
+    let text_width = galleys
+        .iter()
+        .map(|(_, text)| text.size().x)
+        .fold(0.0, f32::max);
+    let width = padding * 2.0 + key_width + gap + text_width;
+    let height = padding * 2.0 + row_height * ROWS.len() as f32 - 3.0;
+    let origin = egui::pos2(screen.left() + 12.0, screen.bottom() - 12.0 - height);
+    painter.rect_filled(
+        egui::Rect::from_min_size(origin, egui::vec2(width, height)),
+        6.0,
+        Color32::from_black_alpha(200),
+    );
+    painter.rect_stroke(
+        egui::Rect::from_min_size(origin, egui::vec2(width, height)),
+        6.0,
+        Stroke::new(1.0, Color32::from_white_alpha(22)),
+        StrokeKind::Inside,
+    );
+    for (index, (key, text)) in galleys.iter().enumerate() {
+        let row_top = origin.y + padding + index as f32 * row_height;
+        let key_rect = egui::Rect::from_min_size(
+            egui::pos2(origin.x + padding, row_top - 1.0),
+            egui::vec2(key_width, row_height - 2.0),
+        );
+        painter.rect_filled(key_rect, 3.0, Color32::from_white_alpha(28));
+        painter.galley(
+            egui::pos2(key_rect.left() + key_pad.x, key_rect.top() + 2.0),
+            key.clone(),
+            Color32::WHITE,
+        );
+        painter.galley(
+            egui::pos2(key_rect.right() + gap, row_top + 2.0),
+            text.clone(),
+            Color32::from_white_alpha(220),
+        );
+    }
+}
+
 fn draw_size_badge(ui: &mut egui::Ui, selection: egui::Rect) {
     let text = format!(
         "{} x {} px",
@@ -1946,23 +2557,72 @@ fn draw_size_badge(ui: &mut egui::Ui, selection: egui::Rect) {
         selection.height().round() as u32
     );
     let pos = egui::pos2(selection.left(), (selection.top() - 22.0).max(4.0));
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text, egui::FontId::monospace(13.0), Color32::WHITE);
+    let galley =
+        ui.painter()
+            .layout_no_wrap(text, egui::FontId::monospace(12.0), Color32::from_gray(25));
     let bg = egui::Rect::from_min_size(
         pos - egui::vec2(4.0, 2.0),
         galley.size() + egui::vec2(8.0, 4.0),
     );
     ui.painter()
-        .rect_filled(bg, 3.0, Color32::from_black_alpha(200));
-    ui.painter().galley(pos, galley, Color32::WHITE);
+        .rect_filled(bg, 3.0, Color32::from_rgb(228, 228, 228));
+    ui.painter().rect_stroke(
+        bg,
+        3.0,
+        Stroke::new(1.0, Color32::from_black_alpha(45)),
+        StrokeKind::Inside,
+    );
+    ui.painter().galley(pos, galley, Color32::from_gray(25));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_monitors, pin_position, selection_center_monitor};
-    use cosnip_capture::MonitorInfo;
-    use cosnip_core::Rect;
+    use super::{
+        fit_monitors, native_selection, pin_position, scale_annotation, selection_center_monitor,
+    };
+    use cosnip_capture::{CapturedMonitor, MonitorInfo};
+    use cosnip_core::{Annotation, AnnotationKind, Frame, Point, Rect};
+
+    #[test]
+    fn native_selection_maps_monitor_pixels() {
+        let monitor = monitor(500, 500, 800, 600);
+        let native = CapturedMonitor::new(
+            monitor.clone(),
+            &Frame::new(500, 375, vec![0; 500 * 375 * 4]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            native_selection(&native, Rect::new(500, 500, 800, 600)),
+            Some((0.625, 0.625))
+        );
+        assert_eq!(
+            native_selection(&native, Rect::new(400, 500, 800, 600)),
+            None
+        );
+    }
+
+    #[test]
+    fn native_annotations_scale_with_the_monitor() {
+        let annotation = Annotation::new(
+            AnnotationKind::Text {
+                position: Point::new(600, 600),
+                text: "hi".into(),
+                size: 20,
+            },
+            [255, 0, 0, 255],
+            4,
+        );
+        let scaled = scale_annotation(&annotation, Point::new(500, 500), 0.625, 0.625);
+        assert_eq!(
+            scaled.kind,
+            AnnotationKind::Text {
+                position: Point::new(63, 63),
+                text: "hi".into(),
+                size: 13,
+            }
+        );
+        assert_eq!(scaled.width, 3);
+    }
 
     #[test]
     fn pin_position_converts_frame_pixels_to_points() {

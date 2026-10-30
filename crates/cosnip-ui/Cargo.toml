@@ -13,5 +13,6 @@ cosnip-imaging = { path = "../cosnip-imaging" }
 cosnip-platform = { path = "../cosnip-platform" }
 eframe.workspace = true
 egui.workspace = true
+rfd.workspace = true
 winit.workspace = true
 jiff.workspace = true

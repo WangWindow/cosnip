@@ -1,19 +1,22 @@
 #![forbid(unsafe_code)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use cosnip_capture::{CaptureError, backend, detect_backend, ffmpeg_available, screen_info};
 use cosnip_core::{OutputRequest, Rect};
-use cosnip_platform::clipboard_available;
-use cosnip_ui::{UiOptions, run};
+use cosnip_platform::{Config, clipboard_available, config_path};
+use cosnip_ui::{UiOptions, UiStyle, run};
 
 #[derive(Debug, Parser)]
 #[command(name = "cosnip", version, about = "A minimal Linux snip and pin tool")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+    /// Override the XDG config file.
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
     /// Print environment/capability diagnostics and exit.
     #[arg(long)]
     doctor: bool,
@@ -25,6 +28,10 @@ enum Command {
     Snip(SnipArgs),
     /// Paste a clipboard image as a pin.
     Paste(PasteArgs),
+    /// Open the settings window.
+    Settings,
+    /// Run the lightweight system tray.
+    Tray,
 }
 
 #[derive(Debug, clap::Args)]
@@ -43,8 +50,8 @@ struct SnipArgs {
     #[arg(long)]
     full: bool,
     /// Delay before capture, in milliseconds.
-    #[arg(long, default_value_t = 0)]
-    delay: u64,
+    #[arg(long)]
+    delay: Option<u64>,
     /// Copy the selection (default when no output is specified).
     #[arg(long)]
     copy: bool,
@@ -62,25 +69,45 @@ struct SnipArgs {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     if cli.doctor {
-        return doctor();
+        return doctor(cli.config.as_deref());
     }
+    let config_file = cli
+        .config
+        .clone()
+        .unwrap_or_else(cosnip_platform::config_path);
+    let config = load_config(cli.config.as_deref());
     match cli.command {
-        Some(Command::Snip(args)) => snip(args),
-        Some(Command::Paste(args)) => paste(args),
+        Some(Command::Snip(args)) => snip(args, &config),
+        Some(Command::Paste(args)) => paste(args, &config),
+        Some(Command::Settings) => settings(&config_file),
+        Some(Command::Tray) => tray(&config_file),
         None => {
-            eprintln!("cosnip: use `cosnip snip`, `cosnip paste`, or `cosnip --doctor`");
+            eprintln!(
+                "cosnip: use `cosnip snip`, `cosnip paste`, `cosnip settings`, `cosnip tray`, or `cosnip --doctor`"
+            );
             ExitCode::from(2)
         }
     }
 }
 
-fn snip(args: SnipArgs) -> ExitCode {
+fn snip(args: SnipArgs, config: &Config) -> ExitCode {
     if args.area.is_some() && args.full {
         eprintln!("cosnip: --area and --full are mutually exclusive");
         return ExitCode::from(2);
     }
-    if args.delay > 0 {
-        std::thread::sleep(Duration::from_millis(args.delay));
+    if let Some(values) = &args.area {
+        if values.len() != 4 {
+            eprintln!("cosnip: --area requires four integers");
+            return ExitCode::from(2);
+        }
+        if values[2] <= 0 || values[3] <= 0 {
+            eprintln!("cosnip: --area width and height must be positive");
+            return ExitCode::from(2);
+        }
+    }
+    let delay = args.delay.unwrap_or(config.general.delay_ms);
+    if delay > 0 {
+        std::thread::sleep(Duration::from_millis(delay));
     }
 
     let kind = match detect_backend() {
@@ -90,20 +117,20 @@ fn snip(args: SnipArgs) -> ExitCode {
             return ExitCode::from(3);
         }
     };
-    let backend = backend(kind);
-    if let Err(error) = backend.is_available() {
+    if let Err(error) = backend(kind).is_available() {
         eprintln!("cosnip: {error}");
         return ExitCode::from(3);
     }
 
     let started = Instant::now();
-    let frame = match backend.capture() {
-        Ok(frame) => frame,
+    let captured = match cosnip_capture::capture_desktop(kind) {
+        Ok(captured) => captured,
         Err(error) => {
             eprintln!("cosnip: {error}");
             return ExitCode::from(4);
         }
     };
+    let frame = captured.frame;
     eprintln!(
         "cosnip: captured {}x{} via {} in {} ms",
         frame.width(),
@@ -124,17 +151,39 @@ fn snip(args: SnipArgs) -> ExitCode {
         eprintln!("cosnip: --copy and --no-copy are mutually exclusive");
         return ExitCode::from(2);
     }
-    let copy = if args.no_copy {
-        false
-    } else if args.copy {
-        true
+    let explicit_output = args.copy || args.no_copy || args.save.is_some() || args.pin;
+    let (copy, save, pin) = if explicit_output {
+        (
+            if args.no_copy {
+                false
+            } else if args.copy {
+                true
+            } else {
+                args.save.is_none() && !args.pin
+            },
+            args.save.clone(),
+            args.pin,
+        )
     } else {
-        args.save.is_none() && !args.pin
+        match config.general.default_output {
+            cosnip_platform::DefaultOutput::Copy => (true, None, false),
+            cosnip_platform::DefaultOutput::Save => {
+                let path = match config.save_path() {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("cosnip: {error}");
+                        return ExitCode::from(2);
+                    }
+                };
+                (false, Some(path), false)
+            }
+            cosnip_platform::DefaultOutput::Pin => (false, None, true),
+        }
     };
     let output = OutputRequest {
         copy,
-        save: args.save.clone(),
-        pin: args.pin,
+        save: save.clone(),
+        pin,
     };
     if !output.has_output() {
         eprintln!("cosnip: no output selected");
@@ -147,8 +196,16 @@ fn snip(args: SnipArgs) -> ExitCode {
             backend: kind,
             initial_selection,
             output,
-            save_path: args.save,
+            save_path: save,
+            save_dir: config.save_dir(),
+            filename: config.general.filename.clone(),
             monitors: cosnip_capture::monitors().unwrap_or_default(),
+            native: if config.general.native_output {
+                captured.native
+            } else {
+                Vec::new()
+            },
+            style: style(config),
         },
     );
     if outcome.code != 0 {
@@ -157,7 +214,7 @@ fn snip(args: SnipArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn paste(args: PasteArgs) -> ExitCode {
+fn paste(args: PasteArgs, config: &Config) -> ExitCode {
     if std::env::var_os("DISPLAY").is_none() {
         eprintln!("cosnip: paste requires X11 or XWayland; DISPLAY is not set");
         return ExitCode::from(3);
@@ -170,7 +227,7 @@ fn paste(args: PasteArgs) -> ExitCode {
         }
     };
     let position = cosnip_platform::global_pointer();
-    let outcome = cosnip_ui::run_pin(frame, position);
+    let outcome = cosnip_ui::run_pin(frame, position, style(config));
     if outcome.code != 0 {
         return ExitCode::from(outcome.code as u8);
     }
@@ -189,6 +246,49 @@ fn load_paste_frame(args: &PasteArgs) -> Result<cosnip_core::Frame, (u8, String)
         });
     }
     cosnip_platform::clipboard_image().map_err(|error| (3u8, error.to_string()))
+}
+
+fn load_config(path: Option<&Path>) -> Config {
+    let path = path.map(Path::to_path_buf).unwrap_or_else(config_path);
+    match Config::load(&path) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("cosnip: {error}; using defaults");
+            Config::default()
+        }
+    }
+}
+
+fn style(config: &Config) -> UiStyle {
+    UiStyle {
+        annotation_color: config.annotations.color_rgba(),
+        line_width: config.annotations.line_width,
+        font_size: config.annotations.font_size,
+        text_shadow: config.annotations.text_shadow,
+        cursor_mode: config.overlay.cursor_mode,
+        magnifier: config.overlay.magnifier,
+        show_tips: config.overlay.show_tips,
+        pin_backend: config.pin.backend,
+        pin_zoom_step: config.pin.zoom_step,
+    }
+}
+
+fn settings(path: &Path) -> ExitCode {
+    let outcome = cosnip_ui::run_settings(path.to_path_buf());
+    if outcome.code != 0 {
+        return ExitCode::from(outcome.code as u8);
+    }
+    ExitCode::SUCCESS
+}
+
+fn tray(config: &Path) -> ExitCode {
+    match cosnip_platform::run_tray(Some(config.to_path_buf())) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("cosnip: tray failed: {error}");
+            ExitCode::from(3)
+        }
+    }
 }
 
 fn initial_selection(args: &SnipArgs, width: u32, height: u32) -> Result<Option<Rect>, String> {
@@ -212,7 +312,7 @@ fn initial_selection(args: &SnipArgs, width: u32, height: u32) -> Result<Option<
         .ok_or_else(|| "area is outside the captured desktop".into())
 }
 
-fn doctor() -> ExitCode {
+fn doctor(config: Option<&Path>) -> ExitCode {
     let wayland = cosnip_capture::session_is_wayland();
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     println!("session: {}", if wayland { "wayland" } else { "x11" });
@@ -221,6 +321,18 @@ fn doctor() -> ExitCode {
     println!(
         "clipboard: {}",
         if clipboard_available() { "yes" } else { "no" }
+    );
+    let config_path = config
+        .map(Path::to_path_buf)
+        .unwrap_or_else(cosnip_platform::config_path);
+    println!("config: {}", config_path.display());
+    println!(
+        "tray: {}",
+        if cosnip_platform::tray_host_available() {
+            "available"
+        } else {
+            "unavailable (icon hidden)"
+        }
     );
     match screen_info() {
         Ok(info) => println!(
@@ -237,6 +349,14 @@ fn doctor() -> ExitCode {
             );
         }
     }
+    println!(
+        "shell pins: {}",
+        if cosnip_platform::shell_pin::available() {
+            "available"
+        } else {
+            "unavailable (window fallback)"
+        }
+    );
     match detect_backend() {
         Ok(kind) => {
             println!("backend: {}", kind.as_str());

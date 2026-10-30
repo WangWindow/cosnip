@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 //! Image operations for the snip document: crops, PNG encoding, and annotation rasterization.
 
-use std::io::Cursor;
-
 use cosnip_core::{Frame, Rect};
+use image::ImageEncoder;
 
 mod annotate;
 
@@ -45,11 +44,14 @@ pub fn crop(frame: &Frame, rect: Rect) -> Result<Frame, ImagingError> {
 
 /// Encode a frame as a lossless RGBA PNG.
 pub fn encode_png(frame: &Frame) -> Result<Vec<u8>, ImagingError> {
-    let image = image::RgbaImage::from_raw(frame.width(), frame.height(), frame.rgba().to_vec())
-        .ok_or(ImagingError::EmptySelection)?;
     let mut bytes = Vec::new();
-    image::DynamicImage::ImageRgba8(image)
-        .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
+    image::codecs::png::PngEncoder::new(&mut bytes)
+        .write_image(
+            frame.rgba(),
+            frame.width(),
+            frame.height(),
+            image::ExtendedColorType::Rgba8,
+        )
         .map_err(|e| ImagingError::Encode(e.to_string()))?;
     Ok(bytes)
 }

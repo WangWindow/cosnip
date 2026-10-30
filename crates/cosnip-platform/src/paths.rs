@@ -8,6 +8,50 @@ use cosnip_core::output::unique_path;
 
 use crate::PlatformError;
 
+fn xdg_home(variable: &str, fallback: impl FnOnce(&directories::BaseDirs) -> &Path) -> PathBuf {
+    if let Some(path) = std::env::var_os(variable)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        return path;
+    }
+    directories::BaseDirs::new()
+        .map(|dirs| fallback(&dirs).to_path_buf())
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+pub fn config_home() -> PathBuf {
+    xdg_home("XDG_CONFIG_HOME", |dirs| dirs.config_dir())
+}
+
+pub fn config_dir() -> PathBuf {
+    config_home().join("cosnip")
+}
+
+pub fn config_path() -> PathBuf {
+    config_dir().join("config.toml")
+}
+
+pub fn data_dir() -> PathBuf {
+    xdg_home("XDG_DATA_HOME", |dirs| dirs.data_dir()).join("cosnip")
+}
+
+pub fn cache_dir() -> PathBuf {
+    xdg_home("XDG_CACHE_HOME", |dirs| dirs.cache_dir()).join("cosnip")
+}
+
+pub fn runtime_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .unwrap_or_else(std::env::temp_dir)
+        .join("cosnip")
+}
+
+pub fn autostart_dir() -> PathBuf {
+    config_home().join("autostart")
+}
+
 pub fn pictures_dir() -> Result<PathBuf, PlatformError> {
     if let Some(path) = directories::UserDirs::new()
         .and_then(|dirs| dirs.picture_dir().map(std::path::Path::to_path_buf))
@@ -20,12 +64,36 @@ pub fn pictures_dir() -> Result<PathBuf, PlatformError> {
 
 pub fn default_save_path(timestamp: &str) -> Result<PathBuf, PlatformError> {
     let dir = pictures_dir()?;
+    let name = cosnip_core::output::default_file_name(timestamp);
+    save_path(Some(&dir), &name)
+}
+
+/// Resolve a configured save directory and file name; `None` uses the Pictures directory.
+pub fn save_path(directory: Option<&Path>, file_name: &str) -> Result<PathBuf, PlatformError> {
+    let dir = match directory {
+        Some(path) => expand_tilde(path),
+        None => pictures_dir()?,
+    };
     if !dir.exists() {
         std::fs::create_dir_all(&dir)
             .map_err(|e| PlatformError::CreateDir(format!("{}: {e}", dir.display())))?;
     }
-    let name = cosnip_core::output::default_file_name(timestamp);
-    Ok(unique_path(&dir, &name))
+    Ok(unique_path(&dir, file_name))
+}
+
+fn expand_tilde(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if text == "~" {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| path.to_path_buf());
+    }
+    if let Some(rest) = text.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(rest);
+    }
+    path.to_path_buf()
 }
 
 /// Write bytes through a restrictive temporary file and rename into place.

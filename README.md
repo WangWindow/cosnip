@@ -1,204 +1,269 @@
 # Cosnip
 
-Cosnip is a personal, non-commercial Rust reimplementation of Snipaste-style snipping and pinning
-for Linux. It targets **aarch64 and x86_64**, with aarch64 as the primary validation device.
+Cosnip is a lightweight Linux snipping and pinning tool written in Rust. Select a region,
+annotate it if needed, then copy it, save it as PNG, or pin it on screen. The workflow is
+inspired by Snipaste, but Cosnip uses original code and assets and is not affiliated with it.
 
-The reference application is a behavioral oracle only. Cosnip uses original Rust code and original
-assets; it does not ship or copy reference code, strings, or resources. See
-`.specify/memory/constitution.md`.
+Supports X11 and GNOME Wayland, on aarch64 and x86_64.
 
-## Status
+## Features
 
-**M0 reference analysis** is complete and accepted (Feature 001).
+- Full-screen selection overlay with multi-monitor and HiDPI support.
+- Compact Snipaste-style toolbar: shapes, arrow, pencil, highlighter, mosaic, text, eraser,
+  undo/redo, cancel, pin, save, and copy. Right-click a drawing tool for color and width.
+- Annotations: rectangle, ellipse, arrow, line, pencil, highlighter, text, number, mosaic,
+  blur, magnifier, and eraser, with undo/redo. Mosaic, blur, and eraser are freehand brushes;
+  the eraser removes annotation pixels and never alters the underlying screenshot.
+- Copy to clipboard, save to PNG, or pin the selection.
+- Paste a clipboard image or a PNG file as a pin. Pins can be moved, zoomed, and closed.
+- Native-resolution save/pin for selections on scaled monitors, avoiding upscaling blur.
+- Optional GNOME Shell pin backend for sharp, always-on-top pins without XWayland.
+- Snipaste-style tabbed preferences dialog (General, Interface, Snip, Pin, Output, Controls,
+  About) with automatic saving, and a TOML configuration file.
+- Lightweight StatusNotifierItem tray.
 
-**MVP (Feature 002) is implemented**, **Feature 003 adds lossless GNOME capture and
-multi-monitor selection**, **Feature 004 adds selection editing and annotations**, and
-**Feature 005 adds clipboard paste and pinning**:
+## Requirements
 
-- `cosnip snip` captures the desktop, shows a full-screen selection overlay, and copies, saves, or
-  pins the selected region.
-- `cosnip paste` reads an image from the system clipboard (or a PNG via `--file`) and opens a pin
-  at the pointer without starting a capture or showing the snip overlay.
-- X11/Xorg capture uses native X11.
-- GNOME 49 Wayland uses **Mutter ScreenCast + PipeWire raw BGRx frames** (lossless). The old
-  `org.gnome.Shell.Screencast` H.264 path remains as an automatic, logged fallback.
-- Multi-monitor desktops are captured as one virtual desktop. When monitors use different
-  compositor scales, each monitor is recorded with its own Mutter stream and composed into the
-  XWayland desktop coordinate space; a single full-area stream is kept as a fallback.
-  Each monitor gets a fullscreen overlay, and a selection can cross monitor boundaries in global
-  coordinates in either direction.
-- The selection has functional resize handles and can be moved before annotating.
-- Annotation tools: rectangle, ellipse, arrow, line, pencil, highlighter, text, number, mosaic,
-  blur, magnifier, and eraser, in a compact Snipaste-style icon toolbar with hover tooltips.
-  Undo/redo covers adding and erasing annotations.
-- Annotations are rasterized into copied, saved, and pinned output, including CJK text through
-  system-font fallback.
-- Large desktops and large pinned images are split into GL textures no larger than the driver limit
-  (capped at 2048 per side), so 3840-pixel-wide layouts work on software/older GL stacks.
-- Pins are frameless override-redirect image windows with move, wheel zoom, and close. Pin
-  geometry, tiles, zoom, and drag deltas are expressed in the viewport's logical points, so a
-  2x HiDPI desktop places the pin at the selected rectangle instead of at double coordinates.
-- Clipboard images survive process exit on GNOME via the shell clipboard manager (when it takes
-  ownership).
+- Linux with one of:
+  - X11/Xorg
+  - GNOME 50+ Wayland with PipeWire
+- Rust 1.95 or newer, plus a C toolchain, to build from source.
+- PipeWire development headers and LLVM/Clang at build time.
+- Optional: `ffmpeg` for the H.264 fallback on GNOME. Not needed for the normal lossless path.
+- Optional: `xdg-desktop-portal` for the settings folder picker.
+- Optional: a StatusNotifierItem host for the tray. On GNOME, enable the AppIndicator/KStatusNotifier
+  extension.
 
-Still out of scope: post-commit annotation editing/moving/rotation, tray, global hotkeys, settings
-UI, single-instance IPC, history, per-monitor native-resolution output, KDE/portal capture, OCR,
-and text/HTML/URI/color clipboard paste.
-
-## Build
+Build dependencies on Debian/Ubuntu:
 
 ```bash
-# Debian/Ubuntu build dependencies for the PipeWire backend
-sudo apt install libpipewire-0.3-dev libspa-0.2-dev libclang-dev libllvm-dev clang
-
-cargo build --release
-cargo test
+sudo apt install build-essential pkg-config libpipewire-0.3-dev libspa-0.2-dev \
+  libclang-dev libllvm-dev clang
 ```
 
-The default build enables the lossless PipeWire backend. PipeWire is part of GNOME, so no extra
-runtime package is normally needed. `ffmpeg` is only required if the H.264 fallback is used.
-MSRV is Rust 1.95 (required by eframe/egui 0.37).
+Package names vary by distribution. On Fedora, use `gcc pkgconf pipewire-devel clang llvm`;
+on Arch, use `base-devel pkgconf pipewire clang llvm`.
+
+## Install
+
+Build and install into `~/.cargo/bin`:
+
+```bash
+git clone https://github.com/WangWindow/cosnip.git
+cd cosnip
+cargo install --path crates/cosnip-app --release
+```
+
+Make sure `~/.cargo/bin` is in your `PATH`, then check the installation:
+
+```bash
+cosnip --doctor
+```
+
+Alternatively, build and copy the binary anywhere you like:
+
+```bash
+cargo build --release
+install -Dm755 target/release/cosnip ~/.local/bin/cosnip
+```
+
+## Quick start
+
+```bash
+cosnip snip     # drag a region, then press Enter to copy it
+cosnip paste    # pin the current clipboard image
+```
 
 ## Usage
 
-```bash
-# Snip and copy (default output)
-target/release/cosnip snip
-
-# Preselect a region and save it
-target/release/cosnip snip --area 100 100 500 300 --save /tmp/cosnip.png
-
-# Pin the selection
-target/release/cosnip snip --area 100 100 500 300 --pin
-
-# Full screen, copy
-target/release/cosnip snip --full --copy
-
-# Pin the clipboard image at the pointer
-target/release/cosnip paste
-
-# Pin a PNG file at the pointer
-target/release/cosnip paste --file /tmp/cosnip.png
-
-# Diagnostics
-target/release/cosnip --doctor
+```text
+cosnip snip [OPTIONS]      Capture the desktop and select a region
+cosnip paste [--file PATH] Pin a clipboard image or a PNG file
+cosnip settings            Open the settings window
+cosnip tray                Run the system tray
+cosnip --doctor            Print diagnostics and exit
 ```
 
-Overlay keys: drag to select, drag inside to move, drag a handle to resize, arrows nudge, Shift
-keeps a square, Ctrl+A selects all, Ctrl+Z/Ctrl+Shift+Z undo/redo, Enter/Ctrl+C copies, Ctrl+S
-saves, P pins, Escape cancels the current tool or the overlay. The toolbar is icon-only; hover an
-icon for its name and hint. Persistent keyboard tips are intentionally not shown. Pick an annotation
-tool and draw inside the selection; right-click finishes/leaves the current tool.
+`snip` options:
 
-`--area` coordinates are captured-frame pixels. On GNOME HiDPI sessions that is the XWayland
-desktop coordinate space (for example 6976x2304 on the validated 2x layout), not compositor
+| Option | Description |
+|---|---|
+| `--area X Y WIDTH HEIGHT` | Preselect a region. Coordinates are captured-frame pixels. |
+| `--full` | Select the whole captured desktop. |
+| `--delay MS` | Wait before capturing. |
+| `--copy` | Copy the selection. This is the default output. |
+| `--no-copy` | Do not copy the selection. |
+| `--save PATH` | Save the selection as PNG. |
+| `--pin` | Pin the selection on screen. |
+
+Global options:
+
+| Option | Description |
+|---|---|
+| `--config PATH` | Use a custom TOML configuration file. |
+| `--doctor` | Print session, backend, monitor, clipboard, and tray diagnostics. |
+
+Examples:
+
+```bash
+# Full screen, copy only
+cosnip snip --full --copy
+
+# Preselected region, save only
+cosnip snip --area 100 100 500 300 --save ~/Pictures/snip.png
+
+# Select and pin
+cosnip snip --pin
+
+# Pin a PNG file at the pointer
+cosnip paste --file ~/Pictures/snip.png
+```
+
+On GNOME HiDPI sessions, `--area` uses the XWayland desktop coordinate space, not compositor
 logical points.
+
+## Controls
+
+Snip overlay:
+
+| Input | Action |
+|---|---|
+| R / C / A / B / H / M / T / E / V | Rectangle, ellipse, arrow, pencil, highlighter, mosaic, text, eraser, select |
+| Drag | Select a region |
+| Drag inside the selection | Move it |
+| Drag a handle | Resize it |
+| Arrow keys | Nudge the selection |
+| Shift while dragging | Keep a square |
+| Ctrl+A | Select the whole desktop |
+| Enter or Ctrl+C | Copy and close |
+| Ctrl+S | Save |
+| P | Pin |
+| Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
+| Escape | Cancel the current tool, then the overlay |
+| Right-click while annotating | Finish or leave the current tool |
+| Right-click a drawing tool | Choose color and line width |
+
+Pin:
+
+| Input | Action |
+|---|---|
+| Drag | Move the pin |
+| Mouse wheel | Zoom |
+| Right-click | Close the pin (both backends) |
+| Double-click, Escape, or the × button | Close the window pin |
+
+## Configuration
+
+The configuration file is TOML at `$XDG_CONFIG_HOME/cosnip/config.toml`, which defaults to
+`~/.config/cosnip/config.toml`. Use `cosnip settings` to edit it, or edit it directly.
+
+```toml
+[general]
+default_output = "copy"        # copy | save | pin
+save_dir = ""                  # empty = Pictures
+filename = "Cosnip_%Y-%m-%d_%H-%M-%S.png"
+delay_ms = 0
+native_output = true
+
+[overlay]
+cursor_mode = "auto"           # auto | always | hidden
+magnifier = true
+show_tips = true
+
+[annotations]
+color = "#FF4040"
+line_width = 3
+font_size = 20
+text_shadow = true
+
+[pin]
+zoom_step = 0.002
+backend = "auto"               # auto | shell | window
+```
+
+Command-line flags override the configuration. Missing or invalid values fall back to defaults
+with a warning. Changes apply to new `snip` and `paste` processes.
+
+With `native_output = true`, a selection contained within a single monitor whose compositor scale
+differs from the XWayland scale is saved or pinned at that monitor's native pixel size. For
+example, an 800x600 XWayland selection on a 1.25-scale monitor becomes a 500x375 PNG. The pin
+still covers the original on-screen selection rectangle, so it does not shrink visually.
+
+`pin.backend` selects how pins are displayed:
+
+- `auto` uses the Cosnip Pins GNOME Shell extension when it is running, otherwise the window pin.
+- `shell` requires the extension.
+- `window` always uses the XWayland pin window.
+
+The extension is optional. It avoids XWayland resampling and keeps pins above normal windows.
+See [`extensions/README.md`](extensions/README.md). A full extension-only capture/overlay
+prototype is analyzed in [`docs/gnome-native-extension.md`](docs/gnome-native-extension.md).
+
+## Desktop integration
+
+Cosnip does not grab global shortcuts itself. Bind these commands in your desktop's keyboard
+settings:
+
+```text
+cosnip snip
+cosnip paste
+```
+
+On GNOME, open Settings → Keyboard → Custom Shortcuts. Use the full path to `cosnip` if it is not
+in the graphical session's `PATH`.
+
+To start the tray automatically, add a desktop entry to `~/.config/autostart/` that runs
+`cosnip tray` with the full path to the binary.
+
+For native pins on GNOME, install the bundled Shell extension:
+
+```bash
+./extensions/install.sh
+```
+
+New extensions may only load after logging out and back in on Wayland. Then verify with
+`gnome-extensions info cosnip-pins@cosnip`.
 
 ## Platform support
 
-| Session | Backend | Status |
+| Session | Capture backend | Status |
 |---|---|---|
-| X11/Xorg | native X11 `GetImage` | supported; pixel-exact |
-| GNOME 49 Wayland + XWayland | Mutter ScreenCast + PipeWire raw frames | supported; lossless, ~0.14–0.52 s depending on monitor count/scale |
-| GNOME Wayland without PipeWire | GNOME Shell Screencast H.264 | automatic fallback; lossy, ~1.1–1.7 s |
-| Other Wayland | — | unsupported in this MVP |
-| XWayland root capture | — | not used; cannot see native Wayland surfaces |
+| X11/Xorg | Native X11 | Supported, pixel-exact |
+| GNOME 49 Wayland | Mutter ScreenCast + PipeWire raw frames | Supported, lossless |
+| GNOME Wayland without PipeWire | GNOME Screencast H.264 | Automatic fallback, lossy; requires `ffmpeg` |
+| Other Wayland desktops | — | Not supported |
 
-`--doctor` reports the selected backend and every detected monitor. On GNOME the lossless path
-uses the same compositor stream as GNOME's recorder but reads raw `video/x-raw` buffers instead of
-encoding H.264; no temporary video is written.
+Mixed-scale multi-monitor layouts are composed into the XWayland desktop coordinate space. In that
+case monitors with a lower compositor scale are resampled into the canvas. Set `native_output =
+false` to always use the composed canvas size. The live overlay still goes through XWayland's
+global 2x buffer and the compositor downscale on those monitors; single-monitor output avoids
+that path. On GNOME, the optional Shell pin backend displays the native RGBA image directly in
+the compositor, so pins stay sharp on scaled displays.
 
-Multi-monitor is supported for uniform and mixed compositor scales. Cosnip captures every monitor
-with `RecordMonitor` and composes the frames into the XWayland desktop coordinate space. This
-avoids a Mutter area-stream limitation where a mixed-scale area can paint only the primary stage
-view. The composited frame is the XWayland desktop resolution: monitors whose compositor scale is
-below the XWayland scale are resampled up, and true per-monitor native-resolution output is not
-implemented. Validated on a two-monitor GNOME 49 desktop (4096x2304 at 1.25 compositor scale plus
-2880x1800 at 2.0 scale, XWayland desktop 6976x2304), including cross-boundary drags in both
-directions and HiDPI pin placement.
+## Troubleshooting
 
-## Limitations
+- Run `cosnip --doctor` to see the detected session, capture backend, monitors, clipboard support,
+  and tray availability.
+- If capture reports an unsupported session, use X11 or GNOME Wayland with PipeWire.
+- If the tray icon is missing on GNOME, enable the AppIndicator/KStatusNotifier extension.
+- If GNOME falls back to H.264 or asks for `ffmpeg`, check that PipeWire is available and that
+  `cosnip --doctor` reports the PipeWire backend.
+- Clipboard paste supports images only, and `--file` accepts PNG only. If a copied image disappears
+  after the process exits, install or enable a clipboard manager.
+- The settings folder picker requires `xdg-desktop-portal`.
+- Text annotations use installed system fonts. Install a CJK font if CJK text renders as blanks.
 
-- The composited frame uses the XWayland desktop resolution. On a mixed-scale layout, a monitor
-  whose compositor scale is lower than the global XWayland scale is bilinearly resampled into that
-  canvas; saved and copied pixels are therefore not that monitor's native pixels. True per-monitor
-  native-resolution composition is future work.
-- The per-monitor path requires Mutter connector names from RandR. If they are unavailable,
-  Cosnip falls back to a full-stage area stream, which can paint only the primary view on
-  mixed-scale layouts, then to the H.264 fallback.
-- Direct Mutter ScreenCast is GNOME-specific. Other Wayland desktops need the portal ScreenCast
-  path, which is future work.
-- PipeWire development headers, libclang, and libLLVM are required at build time.
-- Annotations cannot be selected, moved, rotated, or re-edited after they are committed; use
-  undo/redo or the eraser. Text rotation and per-item style editing are deferred.
-- Text output is shaped with `cosmic-text` and the system font database. CJK text requires a CJK
-  font installed on the system; the overlay preview uses egui fonts and may differ slightly from
-  the rasterized output.
-- Mosaic/blur previews are block approximations; the saved/copied/pinned output uses the full
-  software effect.
-- The overlay does not show persistent shortcut tips; shortcuts are documented here and in tooltips.
-- No tray/global hotkeys yet; use a desktop shortcut that invokes `cosnip snip` or
-  `cosnip paste`.
-- Clipboard paste is image-only. Text, HTML, URI-list, and color payloads are future work;
-  `--file` accepts PNG only.
-- Clipboard persistence depends on a desktop clipboard manager; on a bare X11 session without one,
-  the image may disappear when the process exits.
-- Pins are opaque image-sized windows on GL configurations without alpha; shadows/rounded
-  transparency are deferred.
-- Pin pointer interaction on a real GNOME 49 XWayland session was not validated with synthetic
-  input because XTest events do not reach non-fullscreen XWayland windows on the validation host.
-  Pin widget geometry and rendering were verified; real-mouse interaction still needs manual
-  confirmation.
-- The H.264 fallback may briefly show the desktop recording indicator and is used only when the
-  lossless path fails.
-
-## Repository layout
-
-```text
-crates/
-  cosnip-core/       pure geometry, selection handles, annotation model/history, output types
-  cosnip-imaging/    crop, PNG encode, software annotation rasterizer (cosmic-text)
-  cosnip-capture/    X11, Mutter ScreenCast + PipeWire, GNOME Screencast fallback
-  cosnip-platform/   clipboard, paths, atomic writes, pointer queries
-  cosnip-ui/         eframe overlay, icon toolbar, pin viewports
-  cosnip-app/        CLI and wiring
-specs/               SDD feature specifications and research
-docs/                ADR, parity matrix, dependency record
-```
-
-## Tests
+## Development
 
 ```bash
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
-
-# Manual Xvfb integration (requires a running Xvfb):
-DISPLAY=:99 XDG_SESSION_TYPE=x11 cargo test -p cosnip-capture --test x11_capture -- --ignored
-DISPLAY=:99 XDG_SESSION_TYPE=x11 cargo test -p cosnip-app --test xvfb_smoke -- --ignored
 ```
 
-The Xvfb smoke test is also the 2048-texture-limit check on a 3840x1080 display.
+Feature specifications live in `specs/`; architecture decisions and the parity record live in
+`docs/`.
 
-Debug-only simulated multi-monitor layout (two 960x1080 halves):
+## License
 
-```bash
-COSNIP_TEST_MONITORS='960x1080+0+0,960x1080+960+0' \
-COSNIP_TEST_WINDOWED_OVERLAY=1 \
-COSNIP_TEST_AUTOCONFIRM_MS=8000 \
-target/debug/cosnip snip --save /tmp/drag.png --no-copy
-```
-
-Drag across the 960-pixel boundary with an XTest tool; a 900→1100 horizontal drag saves 200 px.
-
-Paste smoke test (closes the pin automatically, exits 0):
-
-```bash
-COSNIP_TEST_PIN_CLOSE_MS=2500 \
-target/release/cosnip paste --file /tmp/known.png
-```
-
-Performance on the target (debug build): X11 capture ~0.5 s at 3840x1080, ~12–35 ms at 1080p;
-GNOME Mutter/PipeWire capture-to-overlay 142–412 ms at 1920x1080 (release mixed-scale dual
-monitor 343–520 ms for a 6976x2304 desktop); H.264 fallback ~1.1–1.7 s.
-Overlay and pin are idle when not interacting.
+MIT OR Apache-2.0.

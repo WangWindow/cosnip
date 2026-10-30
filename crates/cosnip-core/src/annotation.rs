@@ -77,15 +77,13 @@ impl Tool {
                 | Self::Mosaic
                 | Self::Blur
                 | Self::Magnifier
+                | Self::Eraser
         )
     }
 
     #[must_use]
     pub const fn is_rect_drag_tool(self) -> bool {
-        matches!(
-            self,
-            Self::Rectangle | Self::Ellipse | Self::Mosaic | Self::Blur
-        )
+        matches!(self, Self::Rectangle | Self::Ellipse)
     }
 }
 
@@ -112,15 +110,18 @@ impl Annotation {
     pub fn bounds(&self) -> Rect {
         let pad = i32::try_from(self.width / 2).unwrap_or(0).saturating_add(2);
         let rect = match &self.kind {
-            AnnotationKind::Rectangle { rect }
-            | AnnotationKind::Ellipse { rect }
-            | AnnotationKind::Mosaic { rect }
-            | AnnotationKind::Blur { rect } => *rect,
+            AnnotationKind::Rectangle { rect } | AnnotationKind::Ellipse { rect } => *rect,
             AnnotationKind::Arrow { start, end } | AnnotationKind::Line { start, end } => {
                 Rect::from_points(*start, *end)
             }
             AnnotationKind::Pencil { points } | AnnotationKind::Marker { points } => {
                 points_bounds(points)
+            }
+            AnnotationKind::Mosaic { points }
+            | AnnotationKind::Blur { points }
+            | AnnotationKind::Eraser { points } => {
+                let radius = self.kind.brush_radius(self.width);
+                points_bounds(points).expand(radius)
             }
             AnnotationKind::Text {
                 position,
@@ -156,6 +157,14 @@ impl Annotation {
             AnnotationKind::Pencil { points } | AnnotationKind::Marker { points } => points
                 .windows(2)
                 .any(|pair| distance_to_segment(point, pair[0], pair[1]) <= tolerance as f32),
+            AnnotationKind::Mosaic { points }
+            | AnnotationKind::Blur { points }
+            | AnnotationKind::Eraser { points } => {
+                let tolerance = self.kind.brush_radius(self.width) as f32;
+                points
+                    .windows(2)
+                    .any(|pair| distance_to_segment(point, pair[0], pair[1]) <= tolerance)
+            }
             _ => true,
         }
     }
@@ -202,6 +211,116 @@ fn distance_to_segment(point: Point, start: Point, end: Point) -> f32 {
     ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()
 }
 
+impl AnnotationKind {
+    /// Brush radius in image pixels for continuous-effect tools.
+    #[must_use]
+    pub fn brush_radius(&self, width: u32) -> i32 {
+        match self {
+            Self::Mosaic { .. } => (width.saturating_mul(12).max(36) / 2) as i32,
+            Self::Blur { .. } | Self::Eraser { .. } => {
+                (width.saturating_mul(10).max(30) / 2) as i32
+            }
+            _ => 0,
+        }
+    }
+}
+
+/// The pixels covered by a continuous brush stroke.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StrokeMask {
+    rect: Rect,
+    bits: Vec<bool>,
+}
+
+impl StrokeMask {
+    #[must_use]
+    pub const fn rect(&self) -> Rect {
+        self.rect
+    }
+
+    #[must_use]
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        if x < self.rect.x || y < self.rect.y || x >= self.rect.right() || y >= self.rect.bottom() {
+            return false;
+        }
+        let index =
+            (y - self.rect.y) as usize * self.rect.width as usize + (x - self.rect.x) as usize;
+        self.bits[index]
+    }
+
+    #[must_use]
+    pub fn any_in(&self, rect: Rect) -> bool {
+        let Some(rect) = rect.intersect(self.rect) else {
+            return false;
+        };
+        (rect.y..rect.bottom()).any(|y| {
+            (rect.x..rect.right()).any(|x| {
+                let index = (y - self.rect.y) as usize * self.rect.width as usize
+                    + (x - self.rect.x) as usize;
+                self.bits[index]
+            })
+        })
+    }
+}
+
+/// Rasterize the area swept by a polyline brush.
+#[must_use]
+pub fn stroke_mask(points: &[Point], radius: i32, bounds: Rect) -> Option<StrokeMask> {
+    let first = points.first()?;
+    let radius = radius.max(1);
+    let mut min_x = first.x;
+    let mut min_y = first.y;
+    let mut max_x = first.x;
+    let mut max_y = first.y;
+    for point in points.iter().skip(1) {
+        min_x = min_x.min(point.x);
+        min_y = min_y.min(point.y);
+        max_x = max_x.max(point.x);
+        max_y = max_y.max(point.y);
+    }
+    let rect = Rect::new(
+        min_x.saturating_sub(radius),
+        min_y.saturating_sub(radius),
+        u32::try_from((max_x - min_x).saturating_add(radius * 2)).unwrap_or(0),
+        u32::try_from((max_y - min_y).saturating_add(radius * 2)).unwrap_or(0),
+    )
+    .intersect(bounds)?;
+    let mut bits = vec![false; rect.width as usize * rect.height as usize];
+
+    let mut stamp = |a: Point, b: Point| {
+        let left = a.x.min(b.x).saturating_sub(radius);
+        let top = a.y.min(b.y).saturating_sub(radius);
+        let right = a.x.max(b.x).saturating_add(radius).saturating_add(1);
+        let bottom = a.y.max(b.y).saturating_add(radius).saturating_add(1);
+        let Some(area) = Rect::new(
+            left,
+            top,
+            u32::try_from(right - left).unwrap_or(0),
+            u32::try_from(bottom - top).unwrap_or(0),
+        )
+        .intersect(rect) else {
+            return;
+        };
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if distance_to_segment(Point::new(x, y), a, b) <= radius as f32 {
+                    let index = (y - rect.y) as usize * rect.width as usize + (x - rect.x) as usize;
+                    bits[index] = true;
+                }
+            }
+        }
+    };
+
+    if points.len() == 1 {
+        stamp(points[0], points[0]);
+    } else {
+        for pair in points.windows(2) {
+            stamp(pair[0], pair[1]);
+        }
+    }
+    Some(StrokeMask { rect, bits })
+}
+
 /// The shape payload of an annotation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AnnotationKind {
@@ -235,10 +354,13 @@ pub enum AnnotationKind {
         value: u32,
     },
     Mosaic {
-        rect: Rect,
+        points: Vec<Point>,
     },
     Blur {
-        rect: Rect,
+        points: Vec<Point>,
+    },
+    Eraser {
+        points: Vec<Point>,
     },
     Magnifier {
         center: Point,
@@ -250,10 +372,6 @@ pub enum AnnotationKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum HistoryAction {
     Add(Annotation),
-    Remove {
-        index: usize,
-        annotation: Annotation,
-    },
 }
 
 /// Committed annotations plus undo/redo history.
@@ -291,21 +409,6 @@ impl AnnotationDocument {
         self.redo.clear();
     }
 
-    /// Remove the topmost annotation under `point`. Returns true when something was erased.
-    pub fn remove_at(&mut self, point: Point) -> bool {
-        let Some(index) = self
-            .items
-            .iter()
-            .rposition(|annotation| annotation.hit_test(point))
-        else {
-            return false;
-        };
-        let annotation = self.items.remove(index);
-        self.undo.push(HistoryAction::Remove { index, annotation });
-        self.redo.clear();
-        true
-    }
-
     pub fn undo(&mut self) -> bool {
         let Some(action) = self.undo.pop() else {
             return false;
@@ -313,10 +416,6 @@ impl AnnotationDocument {
         match &action {
             HistoryAction::Add(_) => {
                 self.items.pop();
-            }
-            HistoryAction::Remove { index, annotation } => {
-                let index = (*index).min(self.items.len());
-                self.items.insert(index, annotation.clone());
             }
         }
         self.redo.push(action);
@@ -329,11 +428,6 @@ impl AnnotationDocument {
         };
         match &action {
             HistoryAction::Add(annotation) => self.items.push(annotation.clone()),
-            HistoryAction::Remove { index, .. } => {
-                if *index < self.items.len() {
-                    self.items.remove(*index);
-                }
-            }
         }
         self.undo.push(action);
         true
@@ -348,7 +442,7 @@ impl AnnotationDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::{Annotation, AnnotationDocument, AnnotationKind, Tool, points_bounds};
+    use super::{Annotation, AnnotationDocument, AnnotationKind, Tool, points_bounds, stroke_mask};
     use crate::geometry::{Point, Rect};
 
     fn rect_annotation(x: i32, y: i32) -> Annotation {
@@ -380,30 +474,6 @@ mod tests {
     }
 
     #[test]
-    fn erasing_is_undoable() {
-        let mut doc = AnnotationDocument::default();
-        doc.add(rect_annotation(10, 10));
-        doc.add(rect_annotation(40, 40));
-        assert!(doc.remove_at(Point::new(45, 45)));
-        assert_eq!(doc.items().len(), 1);
-        assert!(doc.undo());
-        assert_eq!(doc.items().len(), 2);
-        assert!(doc.redo());
-        assert_eq!(doc.items().len(), 1);
-        assert!(!doc.remove_at(Point::new(500, 500)));
-    }
-
-    #[test]
-    fn eraser_prefers_the_topmost_item() {
-        let mut doc = AnnotationDocument::default();
-        doc.add(rect_annotation(10, 10));
-        doc.add(rect_annotation(10, 10));
-        assert!(doc.remove_at(Point::new(15, 15)));
-        assert_eq!(doc.items().len(), 1);
-        assert_eq!(doc.items()[0], rect_annotation(10, 10));
-    }
-
-    #[test]
     fn line_hit_test_uses_distance() {
         let annotation = Annotation::new(
             AnnotationKind::Line {
@@ -418,12 +488,28 @@ mod tests {
     }
 
     #[test]
+    fn stroke_mask_covers_the_brush_radius() {
+        let mask = stroke_mask(
+            &[Point::new(5, 5), Point::new(15, 5)],
+            3,
+            Rect::new(0, 0, 20, 20),
+        )
+        .unwrap();
+        assert!(mask.contains(10, 5));
+        assert!(mask.contains(10, 7));
+        assert!(!mask.contains(10, 10));
+        assert!(mask.any_in(Rect::new(9, 4, 2, 2)));
+    }
+
+    #[test]
     fn tool_metadata_is_consistent() {
         assert_eq!(Tool::ALL.len(), 13);
         assert!(Tool::Rectangle.is_draw_tool());
         assert!(!Tool::Select.is_draw_tool());
-        assert!(!Tool::Eraser.is_draw_tool());
-        assert!(Tool::Mosaic.is_rect_drag_tool());
+        assert!(Tool::Eraser.is_draw_tool());
+        assert!(Tool::Mosaic.is_draw_tool());
+        assert!(Tool::Rectangle.is_rect_drag_tool());
+        assert!(!Tool::Mosaic.is_rect_drag_tool());
         assert!(points_bounds(&[Point::new(5, 7), Point::new(2, 9)]) == Rect::new(2, 7, 3, 2));
     }
 }

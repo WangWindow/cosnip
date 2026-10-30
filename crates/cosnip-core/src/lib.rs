@@ -9,7 +9,9 @@ pub mod geometry;
 pub mod output;
 pub mod selection;
 
-pub use annotation::{Annotation, AnnotationDocument, AnnotationKind, Tool};
+pub use annotation::{
+    Annotation, AnnotationDocument, AnnotationKind, StrokeMask, Tool, stroke_mask,
+};
 pub use frame::{Frame, FrameError};
 pub use geometry::{Point, Rect, Size};
 pub use output::OutputRequest;

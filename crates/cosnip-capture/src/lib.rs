@@ -13,6 +13,7 @@ pub mod x11;
 use std::path::PathBuf;
 
 use cosnip_core::Frame;
+use image::ImageEncoder;
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xproto::ConnectionExt as _;
@@ -44,6 +45,50 @@ pub struct ScreenInfo {
     pub count: usize,
     pub scale: f64,
     pub name: String,
+}
+
+/// A compressed native-resolution frame for one monitor, used for sharp single-monitor output.
+#[derive(Clone, Debug)]
+pub struct CapturedMonitor {
+    pub monitor: MonitorInfo,
+    pub width: u32,
+    pub height: u32,
+    png: Vec<u8>,
+}
+
+impl CapturedMonitor {
+    pub fn new(monitor: MonitorInfo, frame: &Frame) -> Result<Self, CaptureError> {
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                frame.rgba(),
+                frame.width(),
+                frame.height(),
+                image::ExtendedColorType::Rgba8,
+            )
+            .map_err(|error| CaptureError::InvalidFrame(format!("native frame encode: {error}")))?;
+        Ok(Self {
+            monitor,
+            width: frame.width(),
+            height: frame.height(),
+            png,
+        })
+    }
+
+    pub fn frame(&self) -> Result<Frame, CaptureError> {
+        let image = image::load_from_memory_with_format(&self.png, image::ImageFormat::Png)
+            .map_err(|error| CaptureError::InvalidFrame(format!("native frame decode: {error}")))?
+            .to_rgba8();
+        Frame::new(image.width(), image.height(), image.into_raw())
+            .map_err(|error| CaptureError::InvalidFrame(error.to_string()))
+    }
+}
+
+/// The composed virtual-desktop frame plus optional native monitor frames.
+#[derive(Clone, Debug)]
+pub struct CapturedDesktop {
+    pub frame: Frame,
+    pub native: Vec<CapturedMonitor>,
 }
 
 /// One monitor in captured-desktop (X11 root) coordinates.
@@ -170,6 +215,22 @@ pub fn backend(kind: CaptureBackendKind) -> Box<dyn CaptureBackend> {
         CaptureBackendKind::GnomeScreencast => Box::new(gnome::GnomeScreencast),
         #[cfg(feature = "pipewire")]
         CaptureBackendKind::GnomePipewire => Box::new(mutter::MutterPipewire),
+    }
+}
+
+/// Capture the desktop and retain native-resolution monitor frames when available.
+pub fn capture_desktop(kind: CaptureBackendKind) -> Result<CapturedDesktop, CaptureError> {
+    match kind {
+        CaptureBackendKind::X11 => Ok(CapturedDesktop {
+            frame: x11::X11Backend.capture()?,
+            native: Vec::new(),
+        }),
+        CaptureBackendKind::GnomeScreencast => Ok(CapturedDesktop {
+            frame: gnome::GnomeScreencast.capture()?,
+            native: Vec::new(),
+        }),
+        #[cfg(feature = "pipewire")]
+        CaptureBackendKind::GnomePipewire => mutter::capture_desktop(),
     }
 }
 

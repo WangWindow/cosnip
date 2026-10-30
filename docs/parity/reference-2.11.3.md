@@ -75,28 +75,28 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | BEH-006/011 overlay/coverage/focus | parity | One fullscreen viewport per monitor; global selection coordinates |
 | BEH-007 selection/badge/handles | parity | Drag, arrows, square, Ctrl+A, move, and eight functional resize handles |
 | BEH-008 magnifier/color | partial | 11x11 magnifier, coordinates, RGB/HEX; no C/Shift color-copy shortcuts |
-| BEH-009 keyboard tips | difference | persistent bottom-left tips intentionally absent; icon tooltips expose names/hints |
-| BEH-010 toolbar | partial | compact single-row icon toolbar (original line icons), palette/widths/undo/redo/output actions |
+| BEH-009 keyboard tips | partial | configurable bottom-left tips list only the shortcuts Cosnip implements |
+| BEH-010 toolbar | parity | reference item set/order: shapes group, arrow, pencil, highlighter, mosaic, text, eraser, undo/redo, cancel, pin, save, copy; right-click style popup |
 | BEH-012 override overlay | difference | WM-managed fullscreen used for focus |
-| BEH-013 pin flags | parity | override-redirect, depth 32, Utility, skip taskbar/pager |
+| BEH-013 pin flags | parity | window backend: override-redirect, depth 32, Utility, skip taskbar/pager; shell backend: always-on-top Shell actor |
 | BEH-014 ARGB/shadow | partial | depth 32; opaque image-sized pin, no shadow/opacity |
 | BEH-015 click-through | deferred | no toggle UI/hotkey yet |
 | BEH-016 pin interactions | partial | drag, wheel zoom, close; no rotate/flip/opacity |
-| BEH-017 native stacking | parity | native screencast shows pin above browser |
-| BEH-018 annotation items | partial | rectangle/ellipse/arrow/line/pencil/marker/text/number/mosaic/blur/magnifier/eraser; no post-commit move/edit/rotate |
+| BEH-017 native stacking | partial | window backend verified above native windows; Shell extension backend implemented but awaits a Shell reload/login test |
+| BEH-018 annotation items | partial | rectangle/ellipse/arrow/line/pencil/marker/text/number/mosaic/blur/magnifier/eraser; mosaic/blur/eraser are freehand strokes; no post-commit move/edit/rotate |
 | BEH-019 undo/redo | partial | add and erase history; style/move/rotate edits do not exist yet |
 | BEH-020 right-click finish/re-edit | partial | finishes a draft or returns to Select; no re-edit after commit |
 | BEH-021 text/CJK/IME | partial | egui IME editor + cosmic-text output; system CJK fallback, no rotation |
 | BEH-022 image clipboard | parity | 500x300 read by native Wayland GTK4 after exit; GNOME capture is now lossless |
 | BEH-023 text/HTML/URI/color clipboard | deferred | later feature; image clipboard read is implemented |
-| BEH-024..026 hotkeys | partial | `cosnip paste` implements the F3 image-paste behavior; F1/F3 global hotkeys still use a desktop shortcut |
+| BEH-024..026 hotkeys | partial | `cosnip paste` implements F3 behavior; F1/F3 shortcuts are configured in GNOME Settings rather than grabbed internally |
 | BEH-027..029 CLI | partial | `snip`, `--area`, `--full`, `--delay`, `--copy`, `--save`, `--pin`; other commands later |
-| BEH-030/031 config/history | deferred | no config or history in MVP |
-| BEH-032 tray | deferred | no tray in MVP |
+| BEH-030/031 config/history | partial | XDG TOML config and settings UI implemented; history/session restore deferred |
+| BEH-032 tray | partial | lightweight StatusNotifierItem tray (Snip/Paste/Settings/Quit); pin list/hide-show deferred |
 | BEH-033 output | partial | PNG only; JPEG/WebP later |
 | BEH-034/035 hold semantics | difference | MVP always shows overlay; no `--hold` |
 | BEH-041 multi-monitor/DPI | parity | Mixed-scale dual-monitor capture via per-monitor `RecordMonitor` + XWayland-canvas composition; drags cross boundaries in both directions; pin geometry is point-correct at 2x. Native per-monitor output remains future work |
-| BEH-042 portal/pure Wayland | difference | direct Mutter ScreenCast on GNOME; portal and pure-Wayland UI not implemented |
+| BEH-042 portal/pure Wayland | partial | direct Mutter ScreenCast capture; optional GNOME Shell pin actor avoids XWayland resampling; the selection overlay remains XWayland |
 | BEH-045 pin shadow margin | difference | image-sized pin avoids black margin on depth-24 GL |
 
 ### Feature 003 Evidence
@@ -125,9 +125,9 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | Text | egui editor accepted "Hello"; saved output contains rasterized text |
 | CJK fallback | unit test renders `中文` through the system font database |
 | Number | click places sequential numbered discs |
-| Mosaic/blur | Xvfb over xmessage text produced pixelated and softened output |
+| Mosaic/blur | Freehand stroke renderer covered by imaging tests; mosaic block mask and blur source sampling verified |
 | Magnifier | Xvfb output shows enlarged source text inside the circle |
-| Eraser | unit test removes the topmost annotation and is undoable |
+| Eraser | unit test restores source pixels through an annotation and preserves untouched annotation pixels |
 | Undo/redo | toolbar Undo removed the newest rectangle; Ctrl+Z works with a held modifier |
 | Output isolation | saved PNG contains annotations but no selection border, handles, toolbar, or tips |
 | Icon toolbar | Xvfb screenshot shows original line icons, blue active tool, hover fill/tooltip |
@@ -147,3 +147,27 @@ demonstrated; `partial` means a deliberately reduced subset; `deferred` means a 
 | No capture path | paste logs show no ScreenCast/PipeWire capture and no temporary media |
 | Pin rendering | grabbed pin contents matched the source image; tiling/close button present |
 | Real-mouse pin interaction | open; synthetic XTest events do not reach non-fullscreen XWayland windows on the host |
+
+### Feature 006 Evidence
+
+| Check | Evidence |
+|---|---|
+| TOML config | `cosnip --config` and the default `$XDG_CONFIG_HOME/cosnip/config.toml` load defaults, validate values, and save atomically |
+| Default output | `default_output = "save"` + `save_dir` saved a 6976x2304 PNG to the configured directory |
+| Settings window | Reference-style preferences: 7 top tabs, optional sub-tabs, bordered group pages, help/restore footer, automatic save, compact 560x440 window |
+| Folder picker | `rfd` uses the XDG FileChooser portal (v4 available on the validation host); selection runs on a worker thread |
+| Shortcut guidance | Settings shows absolute `cosnip snip`/`cosnip paste` commands and opens GNOME Keyboard settings |
+| Tray | `cosnip tray` registered `org.cosnip.Tray` and a StatusNotifierItem with the running AppIndicator host; PSS ~6.7 MB; duplicate launch exits 0 |
+| Tray host absence | Missing SNI host is treated as a hidden icon, not an error |
+| Autostart | Writes `$XDG_CONFIG_HOME/autostart/cosnip-tray.desktop` with the current executable |
+| Overlay text | Editor is transparent with a subtle shadow; preview font size is converted to viewport points, so pinned text matches the editor |
+| Cursor after text | Cursor visibility is recomputed from canvas/chrome/text state and restored on close |
+| Eraser | Freehand source-restore stroke; preview and output share the same stroke mask and frame-pixel scale |
+| Pin shadow | Shadow margin prototyped and removed; image-sized pins avoid transparent compositing artifacts |
+| Toolbar alignment | 13 reference items in reference order, 414x30 light toolbar, 30 px item cells, right-click color/width popup, separate rectangle/ellipse group glyph |
+| Settings alignment | Reference-style top tabs (General/Interface/Snip/Pin/Output/Controls/About), optional sub-tabs, bordered group pages, help/restore footer, automatic save |
+| Shell pin D-Bus | Headless GNOME Shell 51 loaded the extension; `Ping`, `Pin`, `Count`, and `Clear` succeeded; `cosnip paste --file` exited 0 and left one shell pin |
+| Shell pin fallback | `--doctor` reports `shell pins: available` only when the extension owns `org.cosnip.Pins`; otherwise the pin window backend is used |
+| Shell visual/interaction | Open; drag, wheel zoom, right-click close, overview hiding, and visual crispness need a real unlocked GNOME session |
+| Native output | A single-monitor selection on the 1.25-scale monitor saves/pins at native size (800x600 global -> 500x375 PNG); the pin display covers the original selection rectangle |
+| Memory | Full-screen pin PSS 260 MB -> 156 MB (private anonymous ~106 MB); overlay PSS ~205 MB (includes a compressed native frame); save uses streaming PNG encoding |

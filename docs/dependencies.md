@@ -24,8 +24,10 @@ license, and attack surface (Constitution III).
 | `libspa` / `libspa-sys` / `pipewire-sys` | 0.10.1 | MIT | Transitive PipeWire/SPA bindings for format negotiation and buffer mapping |
 | `futures-lite` | 2.6 | Apache-2.0 OR MIT | Polling the `PipeWireStreamAdded` signal with a timeout |
 | `async-io` | 2.6 | Apache-2.0 OR MIT | Timeout timer for D-Bus signal/stream startup |
-| `ashpd` | planned | MIT | Portal ScreenCast/GlobalShortcuts for a later backend |
-| `ksni` | planned for tray | MIT | StatusNotifierItem tray; GNOME may require an extension |
+| `ashpd` | transitive via `rfd` | MIT | Portal file chooser used by the settings folder picker |
+| `ksni` | 0.3.7 | Unlicense | StatusNotifierItem tray with `async-io` (no tokio); GNOME uses the AppIndicator extension |
+| `rfd` | 0.17 | MIT | Folder picker via XDG desktop portal; no GTK linkage |
+| `serde` / `toml` | 1 / 0.9 | MIT OR Apache-2.0 | XDG TOML configuration |
 | `clap` | 4.6 | MIT OR Apache-2.0 | CLI surface |
 | `jiff` | 0.2 | MIT | Timestamped default output names |
 | `tracing` / `tracing-subscriber` | 0.1 | MIT | Available for redacted logs; MVP uses stderr messages |

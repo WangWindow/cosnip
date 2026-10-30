@@ -25,8 +25,8 @@ use pw::spa::pod::Pod;
 use zbus::block_on;
 
 use crate::{
-    CaptureBackend, CaptureBackendKind, CaptureError, MonitorInfo, desktop_is_gnome,
-    session_is_wayland,
+    CaptureBackend, CaptureBackendKind, CaptureError, CapturedDesktop, CapturedMonitor,
+    MonitorInfo, desktop_is_gnome, session_is_wayland,
 };
 
 const MUTTER_NAME: &str = "org.gnome.Mutter.ScreenCast";
@@ -68,26 +68,37 @@ impl CaptureBackend for MutterPipewire {
     }
 
     fn capture(&self) -> Result<Frame, CaptureError> {
-        self.is_available()?;
-        let info = crate::screen_info()?;
-        let monitors = crate::monitors().unwrap_or_default();
+        Ok(capture_desktop()?.frame)
+    }
+}
 
-        match capture_per_monitor(&monitors, info.width, info.height) {
-            Ok(frame) => Ok(frame),
-            Err(error) => {
-                eprintln!(
-                    "cosnip: per-monitor Mutter capture failed ({error}); trying area capture"
-                );
-                match capture_area(info.width, info.height) {
-                    Ok(frame) => Ok(frame),
-                    Err(area_error) => {
-                        eprintln!(
-                            "cosnip: Mutter ScreenCast failed ({area_error}); trying Screencast fallback"
-                        );
-                        crate::gnome::GnomeScreencast
-                            .capture()
-                            .and_then(|frame| normalize_frame(frame, info.width, info.height))
-                    }
+/// Capture the composed desktop and any native monitor frames needed for sharp output.
+pub(crate) fn capture_desktop() -> Result<CapturedDesktop, CaptureError> {
+    let backend = MutterPipewire;
+    backend.is_available()?;
+    let info = crate::screen_info()?;
+    let monitors = crate::monitors().unwrap_or_default();
+
+    match capture_per_monitor(&monitors, info.width, info.height) {
+        Ok((frame, native)) => Ok(CapturedDesktop { frame, native }),
+        Err(error) => {
+            eprintln!("cosnip: per-monitor Mutter capture failed ({error}); trying area capture");
+            match capture_area(info.width, info.height) {
+                Ok(frame) => Ok(CapturedDesktop {
+                    frame,
+                    native: Vec::new(),
+                }),
+                Err(area_error) => {
+                    eprintln!(
+                        "cosnip: Mutter ScreenCast failed ({area_error}); trying Screencast fallback"
+                    );
+                    crate::gnome::GnomeScreencast
+                        .capture()
+                        .and_then(|frame| normalize_frame(frame, info.width, info.height))
+                        .map(|frame| CapturedDesktop {
+                            frame,
+                            native: Vec::new(),
+                        })
                 }
             }
         }
@@ -103,7 +114,7 @@ fn capture_per_monitor(
     monitors: &[MonitorInfo],
     width: u32,
     height: u32,
-) -> Result<Frame, CaptureError> {
+) -> Result<(Frame, Vec<CapturedMonitor>), CaptureError> {
     if monitors.is_empty() {
         return Err(CaptureError::Unavailable("no monitors detected".into()));
     }
@@ -128,6 +139,16 @@ fn capture_per_monitor(
     let frames = pipewire_capture(&session.nodes);
     session.stop();
     let frames = frames?;
+    if monitors.len() == 1 {
+        let monitor = &monitors[0];
+        let frame = frames.into_iter().next().ok_or(CaptureError::Timeout)?;
+        if frame.width() == width && frame.height() == height {
+            return Ok((frame, Vec::new()));
+        }
+        let native = CapturedMonitor::new(monitor.clone(), &frame)?;
+        let scaled = scale_frame(frame, width, height)?;
+        return Ok((scaled, vec![native]));
+    }
 
     let mut desktop = Frame::new(
         width,
@@ -135,13 +156,17 @@ fn capture_per_monitor(
         [0u8, 0, 0, 255].repeat(width as usize * height as usize),
     )
     .map_err(|error| CaptureError::InvalidFrame(error.to_string()))?;
+    let mut native = Vec::new();
     for (monitor, frame) in monitors.iter().zip(frames) {
-        let scaled = frame
-            .scaled(monitor.width, monitor.height)
-            .map_err(|error| CaptureError::InvalidFrame(error.to_string()))?;
-        desktop.blit(&scaled, monitor.x, monitor.y);
+        if frame.width() == monitor.width && frame.height() == monitor.height {
+            desktop.blit(&frame, monitor.x, monitor.y);
+        } else {
+            native.push(CapturedMonitor::new(monitor.clone(), &frame)?);
+            let scaled = scale_frame(frame, monitor.width, monitor.height)?;
+            desktop.blit(&scaled, monitor.x, monitor.y);
+        }
     }
-    Ok(desktop)
+    Ok((desktop, native))
 }
 
 /// Fall back to one Mutter area stream covering the logical stage.
@@ -160,13 +185,22 @@ fn capture_area(width: u32, height: u32) -> Result<Frame, CaptureError> {
 }
 
 fn normalize_frame(frame: Frame, width: u32, height: u32) -> Result<Frame, CaptureError> {
+    scale_frame(frame, width, height)
+}
+
+/// Resize a captured frame with Lanczos3. Upscaling with a sharp kernel keeps the image closer
+/// to the native monitor pixels after Mutter's compositor downscale than bilinear resampling.
+fn scale_frame(frame: Frame, width: u32, height: u32) -> Result<Frame, CaptureError> {
     if frame.width() == width && frame.height() == height {
-        Ok(frame)
-    } else {
-        frame
-            .scaled(width, height)
-            .map_err(|error| CaptureError::InvalidFrame(error.to_string()))
+        return Ok(frame);
     }
+    let (source_width, source_height) = (frame.width(), frame.height());
+    let image = image::RgbaImage::from_raw(source_width, source_height, frame.into_rgba())
+        .ok_or_else(|| CaptureError::InvalidFrame("invalid frame buffer".into()))?;
+    let resized =
+        image::imageops::resize(&image, width, height, image::imageops::FilterType::Nearest);
+    Frame::new(width, height, resized.into_raw())
+        .map_err(|error| CaptureError::InvalidFrame(error.to_string()))
 }
 
 struct MutterSession {

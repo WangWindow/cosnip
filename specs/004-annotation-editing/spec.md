@@ -89,11 +89,11 @@ and a magnifier; save and inspect the result.
    font fallback and renders the characters.
 3. **Given** the Number tool, **When** the user clicks, **Then** a numbered disc is placed and the
    next click uses the next number.
-4. **Given** Mosaic/Blur, **When** the user drags, **Then** the saved output contains a pixelated /
+4. **Given** Mosaic/Blur, **When** the user drags a brush stroke, **Then** the saved output contains a pixelated /
    blurred region and the preview shows a block approximation.
 5. **Given** the Magnifier tool, **When** the user clicks, **Then** a circular zoomed view of the
    frozen frame is committed.
-6. **Given** the Eraser, **When** the user clicks an annotation, **Then** the topmost hit item is
+6. **Given** the Eraser, **When** the user drags over an annotation, **Then** the covered pixels are
    removed and the removal is undoable.
 
 ---

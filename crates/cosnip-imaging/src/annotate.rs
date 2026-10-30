@@ -5,7 +5,7 @@
 //! `cosmic-text` (including CJK fallback).
 
 use cosmic_text::{Attrs, Buffer, Color as TextColor, FontSystem, Metrics, Shaping, SwashCache};
-use cosnip_core::{Annotation, AnnotationKind, Frame, Point, Rect};
+use cosnip_core::{Annotation, AnnotationKind, Frame, Point, Rect, stroke_mask};
 
 use crate::ImagingError;
 
@@ -16,9 +16,24 @@ pub fn render(
     annotations: &[Annotation],
 ) -> Result<Frame, ImagingError> {
     let base = crate::crop(frame, selection)?;
-    let mut canvas = Canvas::from_frame(&base, selection);
+    let mut text_renderer = annotations
+        .iter()
+        .any(|annotation| {
+            matches!(
+                &annotation.kind,
+                AnnotationKind::Text { .. } | AnnotationKind::Number { .. }
+            )
+        })
+        .then(TextRenderer::new);
+    let mut canvas = Canvas::from_frame(base, selection);
     for annotation in annotations {
-        draw_annotation(&mut canvas, &base, annotation);
+        draw_annotation(
+            &mut canvas,
+            frame,
+            selection,
+            &mut text_renderer,
+            annotation,
+        );
     }
     Frame::new(canvas.width, canvas.height, canvas.rgba)
         .map_err(|e| ImagingError::Encode(e.to_string()))
@@ -32,12 +47,14 @@ struct Canvas {
 }
 
 impl Canvas {
-    fn from_frame(frame: &Frame, origin: Rect) -> Self {
+    fn from_frame(frame: Frame, origin: Rect) -> Self {
+        let width = frame.width();
+        let height = frame.height();
         Self {
             origin: Point::new(origin.x, origin.y),
-            width: frame.width(),
-            height: frame.height(),
-            rgba: frame.rgba().to_vec(),
+            width,
+            height,
+            rgba: frame.into_rgba(),
         }
     }
 
@@ -94,7 +111,13 @@ impl Canvas {
     }
 }
 
-fn draw_annotation(canvas: &mut Canvas, base: &Frame, annotation: &Annotation) {
+fn draw_annotation(
+    canvas: &mut Canvas,
+    source: &Frame,
+    selection: Rect,
+    text_renderer: &mut Option<TextRenderer>,
+    annotation: &Annotation,
+) {
     let color = annotation.color;
     let width = annotation.width.max(1) as i32;
     match &annotation.kind {
@@ -122,23 +145,46 @@ fn draw_annotation(canvas: &mut Canvas, base: &Frame, annotation: &Annotation) {
             text,
             size,
         } => {
-            draw_text(canvas, *position, text, *size, color);
+            if let Some(renderer) = text_renderer.as_mut() {
+                draw_text(canvas, renderer, *position, text, *size, color);
+            }
         }
         AnnotationKind::Number { position, value } => {
-            draw_number(canvas, *position, *value, color, width);
+            if let Some(renderer) = text_renderer.as_mut() {
+                draw_number(canvas, renderer, *position, *value, color, width);
+            }
         }
-        AnnotationKind::Mosaic { rect } => {
-            apply_mosaic(canvas, *rect, (width * 4).max(8) as u32);
+        AnnotationKind::Mosaic { points } => {
+            apply_mosaic_stroke(
+                canvas,
+                source,
+                selection,
+                points,
+                annotation.kind.brush_radius(annotation.width.max(1)),
+                (width * 4).max(8) as u32,
+            );
         }
-        AnnotationKind::Blur { rect } => {
-            apply_blur(canvas, *rect, (width * 2).max(2) as u32);
+        AnnotationKind::Blur { points } => {
+            apply_blur_stroke(
+                canvas,
+                source,
+                selection,
+                points,
+                annotation.kind.brush_radius(annotation.width.max(1)),
+                (width * 2).max(2) as u32,
+            );
         }
-        AnnotationKind::Magnifier {
-            center,
-            radius,
-            zoom,
-        } => {
-            draw_magnifier(canvas, base, *center, *radius, *zoom, color, width);
+        AnnotationKind::Eraser { points } => {
+            apply_eraser_stroke(
+                canvas,
+                source,
+                selection,
+                points,
+                annotation.kind.brush_radius(annotation.width.max(1)),
+            );
+        }
+        AnnotationKind::Magnifier { .. } => {
+            draw_magnifier(canvas, source, selection, annotation);
         }
     }
 }
@@ -258,7 +304,14 @@ fn draw_disc(canvas: &mut Canvas, center: Point, radius: i32, color: [u8; 4], al
     }
 }
 
-fn draw_number(canvas: &mut Canvas, position: Point, value: u32, color: [u8; 4], width: i32) {
+fn draw_number(
+    canvas: &mut Canvas,
+    text_renderer: &mut TextRenderer,
+    position: Point,
+    value: u32,
+    color: [u8; 4],
+    width: i32,
+) {
     let radius = (14 + width).clamp(12, 24);
     draw_disc(canvas, position, radius, color, 255);
     let label = value.to_string();
@@ -268,85 +321,116 @@ fn draw_number(canvas: &mut Canvas, position: Point, value: u32, color: [u8; 4],
         position.x - text_width / 2,
         position.y - size as i32 / 2 - 1,
     );
-    draw_text_with(canvas, origin, &label, size, [255, 255, 255, 255], None);
+    text_renderer.draw(canvas, origin, &label, size, [255, 255, 255, 255], None);
 }
 
-fn draw_text(canvas: &mut Canvas, position: Point, text: &str, size: u32, color: [u8; 4]) {
-    draw_text_with(canvas, position, text, size.max(6), color, None);
+struct TextRenderer {
+    font_system: FontSystem,
+    swash_cache: SwashCache,
 }
 
-fn draw_text_with(
+impl TextRenderer {
+    fn new() -> Self {
+        Self {
+            font_system: FontSystem::new(),
+            swash_cache: SwashCache::new(),
+        }
+    }
+
+    fn draw(
+        &mut self,
+        canvas: &mut Canvas,
+        position: Point,
+        text: &str,
+        size: u32,
+        color: [u8; 4],
+        max_width: Option<f32>,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let metrics = Metrics::new(size as f32, (size as f32 * 1.25).max(1.0));
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(max_width, None);
+        buffer.set_text(text, &Attrs::new(), Shaping::Advanced, None);
+        let text_color = TextColor::rgba(color[0], color[1], color[2], color[3]);
+        buffer.draw(
+            &mut self.font_system,
+            &mut self.swash_cache,
+            text_color,
+            |x, y, width, height, color| {
+                for gy in 0..height as i32 {
+                    for gx in 0..width as i32 {
+                        let coverage = color.a();
+                        if coverage == 0 {
+                            continue;
+                        }
+                        let source = [color.r(), color.g(), color.b(), 255];
+                        canvas.blend(position.x + x + gx, position.y + y + gy, source, coverage);
+                    }
+                }
+            },
+        );
+    }
+}
+
+fn draw_text(
     canvas: &mut Canvas,
+    text_renderer: &mut TextRenderer,
     position: Point,
     text: &str,
     size: u32,
     color: [u8; 4],
-    max_width: Option<f32>,
 ) {
-    if text.is_empty() {
-        return;
-    }
-    let mut font_system = FontSystem::new();
-    let mut swash_cache = SwashCache::new();
-    let metrics = Metrics::new(size as f32, (size as f32 * 1.25).max(1.0));
-    let mut buffer = Buffer::new(&mut font_system, metrics);
-    buffer.set_size(max_width, None);
-    buffer.set_text(text, &Attrs::new(), Shaping::Advanced, None);
-    let text_color = TextColor::rgba(color[0], color[1], color[2], color[3]);
-    buffer.draw(
-        &mut font_system,
-        &mut swash_cache,
-        text_color,
-        |x, y, width, height, color| {
-            for gy in 0..height as i32 {
-                for gx in 0..width as i32 {
-                    let coverage = color.a();
-                    if coverage == 0 {
-                        continue;
-                    }
-                    let source = [color.r(), color.g(), color.b(), 255];
-                    canvas.blend(position.x + x + gx, position.y + y + gy, source, coverage);
-                }
-            }
-        },
-    );
+    text_renderer.draw(canvas, position, text, size.max(6), color, None);
 }
 
-fn apply_mosaic(canvas: &mut Canvas, rect: Rect, block: u32) {
-    let rect = match rect.clamp_to(canvas.global_bounds()) {
-        Some(rect) => rect,
-        None => return,
+fn apply_mosaic_stroke(
+    canvas: &mut Canvas,
+    source: &Frame,
+    selection: Rect,
+    points: &[Point],
+    radius: i32,
+    block: u32,
+) {
+    let Some(mask) = stroke_mask(points, radius, canvas.global_bounds()) else {
+        return;
     };
     let block = block.max(2) as i32;
+    let rect = mask.rect();
     let mut y = rect.y;
     while y < rect.bottom() {
-        let mut x = rect.x;
         let block_height = block.min(rect.bottom() - y);
+        let mut x = rect.x;
         while x < rect.right() {
             let block_width = block.min(rect.right() - x);
-            let mut sum = [0u32; 4];
-            let mut count = 0u32;
-            for py in y..y + block_height {
-                for px in x..x + block_width {
-                    if let Some(pixel) = canvas.pixel(px, py) {
-                        for channel in 0..4 {
-                            sum[channel] += u32::from(pixel[channel]);
-                        }
-                        count += 1;
-                    }
-                }
-            }
-            if let Some(count) = std::num::NonZeroU32::new(count) {
-                let count = count.get();
-                let color = [
-                    (sum[0] / count) as u8,
-                    (sum[1] / count) as u8,
-                    (sum[2] / count) as u8,
-                    (sum[3] / count) as u8,
-                ];
+            if mask.any_in(Rect::new(x, y, block_width as u32, block_height as u32)) {
+                let mut sum = [0u32; 4];
+                let mut count = 0u32;
                 for py in y..y + block_height {
                     for px in x..x + block_width {
-                        canvas.set(px, py, color);
+                        if let Some(pixel) = source.pixel(px - selection.x, py - selection.y) {
+                            for channel in 0..4 {
+                                sum[channel] += u32::from(pixel[channel]);
+                            }
+                            count += 1;
+                        }
+                    }
+                }
+                if let Some(count) = std::num::NonZeroU32::new(count) {
+                    let count = count.get();
+                    let color = [
+                        (sum[0] / count) as u8,
+                        (sum[1] / count) as u8,
+                        (sum[2] / count) as u8,
+                        (sum[3] / count) as u8,
+                    ];
+                    for py in y..y + block_height {
+                        for px in x..x + block_width {
+                            if mask.contains(px, py) {
+                                canvas.set(px, py, color);
+                            }
+                        }
                     }
                 }
             }
@@ -356,55 +440,100 @@ fn apply_mosaic(canvas: &mut Canvas, rect: Rect, block: u32) {
     }
 }
 
-fn apply_blur(canvas: &mut Canvas, rect: Rect, radius: u32) {
-    let rect = match rect.clamp_to(canvas.global_bounds()) {
-        Some(rect) => rect,
-        None => return,
+fn apply_blur_stroke(
+    canvas: &mut Canvas,
+    source: &Frame,
+    selection: Rect,
+    points: &[Point],
+    radius: i32,
+    blur: u32,
+) {
+    let Some(mask) = stroke_mask(points, radius, canvas.global_bounds()) else {
+        return;
     };
-    let radius = radius.max(1) as i32;
-    let source = canvas.rgba.clone();
-    let width = canvas.width as i32;
-    let origin_x = canvas.origin.x;
-    let origin_y = canvas.origin.y;
+    let blur = blur.max(1) as i32;
+    let bounds = canvas.global_bounds();
+    let rect = mask.rect();
     for y in rect.y..rect.bottom() {
         for x in rect.x..rect.right() {
+            if !mask.contains(x, y) {
+                continue;
+            }
             let mut sum = [0u32; 4];
             let mut count = 0u32;
-            for dy in -radius..=radius {
-                for dx in -radius..=radius {
+            for dy in -blur..=blur {
+                for dx in -blur..=blur {
                     let sx = x + dx;
                     let sy = y + dy;
-                    if sx < rect.x || sy < rect.y || sx >= rect.right() || sy >= rect.bottom() {
+                    if sx < bounds.x
+                        || sy < bounds.y
+                        || sx >= bounds.right()
+                        || sy >= bounds.bottom()
+                    {
                         continue;
                     }
-                    let index =
-                        ((sy - origin_y) as usize * width as usize + (sx - origin_x) as usize) * 4;
-                    for channel in 0..4 {
-                        sum[channel] += u32::from(source[index + channel]);
+                    if let Some(pixel) = source.pixel(sx - selection.x, sy - selection.y) {
+                        for channel in 0..4 {
+                            sum[channel] += u32::from(pixel[channel]);
+                        }
+                        count += 1;
                     }
-                    count += 1;
                 }
             }
             if let Some(count) = std::num::NonZeroU32::new(count) {
-                let index =
-                    ((y - origin_y) as usize * width as usize + (x - origin_x) as usize) * 4;
-                for (channel, total) in sum.iter().enumerate() {
-                    canvas.rgba[index + channel] = (total / count.get()) as u8;
-                }
+                canvas.set(
+                    x,
+                    y,
+                    [
+                        (sum[0] / count.get()) as u8,
+                        (sum[1] / count.get()) as u8,
+                        (sum[2] / count.get()) as u8,
+                        (sum[3] / count.get()) as u8,
+                    ],
+                );
             }
         }
     }
 }
 
-fn draw_magnifier(
+fn apply_eraser_stroke(
     canvas: &mut Canvas,
-    base: &Frame,
-    center: Point,
-    radius: u32,
-    zoom: u32,
-    color: [u8; 4],
-    width: i32,
+    source: &Frame,
+    selection: Rect,
+    points: &[Point],
+    radius: i32,
 ) {
+    let Some(mask) = stroke_mask(points, radius, canvas.global_bounds()) else {
+        return;
+    };
+    let rect = mask.rect();
+    for y in rect.y..rect.bottom() {
+        for x in rect.x..rect.right() {
+            if !mask.contains(x, y) {
+                continue;
+            }
+            let pixel = source
+                .pixel(x - selection.x, y - selection.y)
+                .unwrap_or([0, 0, 0, 0]);
+            canvas.set(x, y, pixel);
+        }
+    }
+}
+
+fn draw_magnifier(canvas: &mut Canvas, source: &Frame, selection: Rect, annotation: &Annotation) {
+    let AnnotationKind::Magnifier {
+        center,
+        radius,
+        zoom,
+    } = &annotation.kind
+    else {
+        return;
+    };
+    let center = *center;
+    let radius = *radius;
+    let zoom = *zoom;
+    let color = annotation.color;
+    let width = annotation.width.max(1) as i32;
     let radius = radius.max(8) as i32;
     let zoom = zoom.max(1) as f32;
     let diameter = radius * 2;
@@ -415,8 +544,8 @@ fn draw_magnifier(
             }
             let source_x = center.x + (dx as f32 / zoom).round() as i32;
             let source_y = center.y + (dy as f32 / zoom).round() as i32;
-            let pixel = base
-                .pixel(source_x - canvas.origin.x, source_y - canvas.origin.y)
+            let pixel = source
+                .pixel(source_x - selection.x, source_y - selection.y)
                 .or_else(|| canvas.pixel(center.x + dx, center.y + dy))
                 .unwrap_or([0, 0, 0, 255]);
             canvas.set(center.x + dx, center.y + dy, pixel);
@@ -451,6 +580,17 @@ mod tests {
         Frame::new(40, 40, rgba).unwrap()
     }
 
+    fn checker_frame() -> Frame {
+        let mut rgba = Vec::new();
+        for y in 0..40u8 {
+            for x in 0..40u8 {
+                let value = if (x / 2 + y / 2) % 2 == 0 { 0 } else { 255 };
+                rgba.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        Frame::new(40, 40, rgba).unwrap()
+    }
+
     fn annotation(kind: AnnotationKind) -> Annotation {
         Annotation::new(kind, [255, 0, 0, 255], 2)
     }
@@ -479,7 +619,7 @@ mod tests {
             &frame,
             Rect::new(0, 0, 40, 40),
             &[annotation(AnnotationKind::Mosaic {
-                rect: Rect::new(8, 8, 10, 10),
+                points: vec![Point::new(10, 12), Point::new(28, 12)],
             })],
         )
         .unwrap();
@@ -489,23 +629,44 @@ mod tests {
                 colors.insert(out.pixel(x, y));
             }
         }
-        assert!(colors.len() <= 4);
-        assert_eq!(out.pixel(0, 0), frame.pixel(0, 0));
+        assert!(colors.len() <= 8);
+        assert_eq!(out.pixel(39, 39), frame.pixel(39, 39));
     }
 
     #[test]
     fn blur_changes_pixels_without_changing_size() {
-        let frame = frame();
+        let frame = checker_frame();
         let out = render(
             &frame,
             Rect::new(0, 0, 40, 40),
             &[annotation(AnnotationKind::Blur {
-                rect: Rect::new(8, 8, 10, 10),
+                points: vec![Point::new(10, 12), Point::new(28, 12)],
             })],
         )
         .unwrap();
         assert_eq!((out.width(), out.height()), (40, 40));
-        assert_ne!(out.pixel(8, 8), frame.pixel(8, 8));
+        assert_ne!(out.pixel(10, 12), frame.pixel(10, 12));
+    }
+
+    #[test]
+    fn eraser_reveals_the_source_pixels() {
+        let frame = frame();
+        let out = render(
+            &frame,
+            Rect::new(0, 0, 40, 40),
+            &[
+                annotation(AnnotationKind::Rectangle {
+                    rect: Rect::new(10, 10, 20, 20),
+                }),
+                annotation(AnnotationKind::Eraser {
+                    points: vec![Point::new(12, 12), Point::new(14, 12)],
+                }),
+            ],
+        )
+        .unwrap();
+        assert_eq!(out.pixel(15, 10), frame.pixel(15, 10));
+        assert_eq!(out.pixel(15, 12), frame.pixel(15, 12));
+        assert_eq!(out.pixel(28, 28), Some([255, 0, 0, 255]));
     }
 
     #[test]

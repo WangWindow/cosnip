@@ -40,7 +40,7 @@ clamped to the frame with a minimum 4 px size.
 - Draw tool: inside selection → draft; outside → new selection.
 - Text: click opens `TextEditor`; Enter commits, Escape cancels.
 - Number/Magnifier: click commits immediately.
-- Eraser: click removes the topmost hit annotation.
+- Eraser: freehand stroke copies source pixels over annotation pixels.
 - Drafts are committed on pointer release when geometrically valid.
 - Right-click finishes a draft or returns a draw tool to Select.
 - Escape cancels a draft/editor first, then closes the overlay.
@@ -67,7 +67,7 @@ clamped to the frame with a minimum 4 px size.
 - Crop first, then draw in global coordinates through a translating canvas.
 - Raster primitives: thick line/disc stamping, rect/ellipse strokes, arrow head, polyline,
   translucent marker, disc numbers, text via cosmic-text.
-- Mosaic: block averages; blur: box blur; magnifier: nearest-neighbor sample from the base crop.
+- Mosaic: block averages over a freehand stroke; blur: box blur over a freehand stroke; eraser: restores the source frame; magnifier: nearest-neighbor sample from the base crop.
 - Copy/save/pin share the rendered image; pin re-tiles it for GL limits.
 
 **Testing**:

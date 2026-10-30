@@ -8,18 +8,12 @@ use eframe::egui::{self, Color32, Pos2, Rect, Shape, Stroke, Vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
-    Select,
-    Rectangle,
-    Ellipse,
+    Shapes,
     Arrow,
-    Line,
     Pencil,
     Marker,
     Text,
-    Number,
     Mosaic,
-    Blur,
-    Magnifier,
     Eraser,
     Undo,
     Redo,
@@ -27,7 +21,6 @@ pub enum Icon {
     Save,
     Pin,
     Cancel,
-    Stroke(u32),
 }
 
 pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -35,29 +28,15 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
     let width = (rect.width() * 0.09).clamp(1.2, 2.0);
     let stroke = Stroke::new(width, color);
     match icon {
-        Icon::Select => {
-            let points = [
-                (5.0, 3.0),
-                (5.0, 19.0),
-                (9.0, 15.0),
-                (12.0, 22.0),
-                (15.0, 20.5),
-                (12.0, 14.0),
-                (18.0, 14.0),
-            ];
-            polyline(&painter, rect, &points, stroke, true);
-        }
-        Icon::Rectangle => {
-            let rect = map_rect(rect, 4.0, 5.0, 20.0, 19.0);
-            painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
-        }
-        Icon::Ellipse => {
-            let center = map(rect, 12.0, 12.0);
+        Icon::Shapes => {
+            let shape = map_rect(rect, 2.5, 7.0, 11.5, 20.0);
+            painter.rect_stroke(shape, 1.0, stroke, egui::StrokeKind::Inside);
             painter.add(Shape::ellipse_stroke(
-                center,
-                Vec2::new(rect.width() * 8.0 / 24.0, rect.height() * 6.0 / 24.0),
+                map(rect, 17.0, 13.0),
+                Vec2::new(rect.width() * 4.3 / 24.0, rect.height() * 3.5 / 24.0),
                 stroke,
             ));
+            painter.circle_filled(map(rect, 20.5, 5.5), 1.8, Color32::from_rgb(235, 55, 55));
         }
         Icon::Arrow => {
             line(&painter, rect, (5.0, 19.0), (19.0, 5.0), stroke);
@@ -68,11 +47,6 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
                 stroke,
                 false,
             );
-        }
-        Icon::Line => {
-            line(&painter, rect, (5.0, 19.0), (19.0, 5.0), stroke);
-            painter.circle_filled(map(rect, 5.0, 19.0), width, color);
-            painter.circle_filled(map(rect, 19.0, 5.0), width, color);
         }
         Icon::Pencil => {
             polyline(
@@ -106,65 +80,33 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Text => {
             line(&painter, rect, (5.0, 5.0), (19.0, 5.0), stroke);
             line(&painter, rect, (12.0, 5.0), (12.0, 20.0), stroke);
-            line(&painter, rect, (8.0, 20.0), (16.0, 20.0), stroke);
-        }
-        Icon::Number => {
-            painter.circle_stroke(map(rect, 12.0, 12.0), rect.width() * 6.5 / 24.0, stroke);
-            polyline(
-                &painter,
-                rect,
-                &[(10.0, 9.0), (12.0, 7.0), (12.0, 17.0)],
-                stroke,
-                false,
-            );
-            line(&painter, rect, (9.0, 17.0), (15.0, 17.0), stroke);
         }
         Icon::Mosaic => {
-            for gy in 0..3 {
-                for gx in 0..3 {
-                    if (gx + gy) % 2 == 0 {
-                        let x = 4.0 + gx as f32 * 6.0;
-                        let y = 5.0 + gy as f32 * 5.0;
-                        let cell_rect = map_rect(rect, x, y, x + 5.0, y + 4.0);
-                        painter.rect_filled(cell_rect, 0.0, color);
-                    }
-                }
+            painter.rect_stroke(
+                map_rect(rect, 4.0, 4.0, 20.0, 20.0),
+                0.5,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            for (gx, gy) in [(0, 0), (1, 1)] {
+                let x = 4.0 + gx as f32 * 8.0;
+                let y = 4.0 + gy as f32 * 8.0;
+                let cell_rect = map_rect(rect, x, y, x + 8.0, y + 8.0);
+                painter.rect_filled(cell_rect, 0.0, color);
             }
-        }
-        Icon::Blur => {
-            let lines = [
-                (7.0, 5.0, 14.0),
-                (5.0, 9.0, 17.0),
-                (7.0, 13.0, 15.0),
-                (5.0, 17.0, 12.0),
-            ];
-            for (start, y, end) in lines {
-                line(&painter, rect, (start, y), (end, y), stroke);
-                painter.circle_filled(map(rect, end + 1.0, y), width, color);
-            }
-        }
-        Icon::Magnifier => {
-            painter.circle_stroke(map(rect, 10.0, 10.0), rect.width() * 5.0 / 24.0, stroke);
-            line(&painter, rect, (14.0, 14.0), (20.0, 20.0), stroke);
         }
         Icon::Eraser => {
             polyline(
                 &painter,
                 rect,
-                &[
-                    (5.0, 17.0),
-                    (13.0, 7.0),
-                    (20.0, 13.0),
-                    (12.0, 22.0),
-                    (5.0, 17.0),
-                ],
+                &[(4.0, 16.0), (13.0, 5.0), (21.0, 12.0), (12.0, 22.0)],
                 stroke,
-                false,
+                true,
             );
-            line(&painter, rect, (9.0, 13.0), (16.0, 19.0), stroke);
+            line(&painter, rect, (8.5, 11.5), (17.0, 18.0), stroke);
         }
-        Icon::Undo => arc_arrow(&painter, rect, false, stroke),
-        Icon::Redo => arc_arrow(&painter, rect, true, stroke),
+        Icon::Undo => arc_arrow(&painter, rect, false, Stroke::new(width * 1.3, color)),
+        Icon::Redo => arc_arrow(&painter, rect, true, Stroke::new(width * 1.3, color)),
         Icon::Copy => {
             let back = map_rect(rect, 4.0, 4.0, 15.0, 15.0);
             let front = map_rect(rect, 9.0, 9.0, 20.0, 20.0);
@@ -173,35 +115,33 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             painter.rect_stroke(front, 1.0, stroke, egui::StrokeKind::Inside);
         }
         Icon::Save => {
-            line(&painter, rect, (12.0, 3.0), (12.0, 15.0), stroke);
-            polyline(
-                &painter,
-                rect,
-                &[(8.0, 11.0), (12.0, 15.0), (16.0, 11.0)],
+            painter.rect_stroke(
+                map_rect(rect, 4.0, 4.0, 20.0, 20.0),
+                1.0,
                 stroke,
-                false,
+                egui::StrokeKind::Inside,
             );
-            polyline(
-                &painter,
-                rect,
-                &[(4.0, 16.0), (4.0, 21.0), (20.0, 21.0), (20.0, 16.0)],
+            painter.rect_stroke(
+                map_rect(rect, 8.0, 4.0, 16.0, 10.0),
+                0.5,
                 stroke,
-                false,
+                egui::StrokeKind::Inside,
+            );
+            painter.rect_stroke(
+                map_rect(rect, 7.0, 13.0, 17.0, 20.0),
+                0.5,
+                stroke,
+                egui::StrokeKind::Inside,
             );
         }
         Icon::Pin => {
-            painter.circle_filled(map(rect, 9.0, 8.0), rect.width() * 2.8 / 24.0, color);
-            line(&painter, rect, (10.0, 10.0), (17.0, 17.0), stroke);
-            line(&painter, rect, (14.0, 20.0), (20.0, 14.0), stroke);
+            painter.circle_filled(map(rect, 15.0, 8.0), rect.width() * 3.1 / 24.0, color);
+            line(&painter, rect, (13.5, 10.5), (6.5, 18.0), stroke);
+            line(&painter, rect, (9.5, 11.5), (13.0, 15.5), stroke);
         }
         Icon::Cancel => {
-            line(&painter, rect, (6.0, 6.0), (18.0, 18.0), stroke);
-            line(&painter, rect, (18.0, 6.0), (6.0, 18.0), stroke);
-        }
-        Icon::Stroke(thickness) => {
-            let width = (thickness as f32 * 0.65).clamp(1.0, 4.0);
-            let stroke = Stroke::new(width, color);
-            line(&painter, rect, (4.0, 12.0), (20.0, 12.0), stroke);
+            line(&painter, rect, (5.0, 5.0), (19.0, 19.0), stroke);
+            line(&painter, rect, (19.0, 5.0), (5.0, 19.0), stroke);
         }
     }
 }
@@ -221,9 +161,13 @@ fn arc_arrow(painter: &egui::Painter, rect: Rect, mirror: bool, stroke: Stroke) 
         let a = std::f32::consts::PI * 1.05 * direction;
         let dir = Vec2::new(-a.sin() * tangent, a.cos() * tangent);
         let normal = Vec2::new(-dir.y, dir.x);
-        let head = radius * 0.65;
-        painter.line_segment([tip, tip + dir * head + normal * head * 0.7], stroke);
-        painter.line_segment([tip, tip + dir * head - normal * head * 0.7], stroke);
+        let head = radius * 0.85;
+        let base = tip + dir * head;
+        painter.add(Shape::convex_polygon(
+            vec![tip, base + normal * head * 0.8, base - normal * head * 0.8],
+            stroke.color,
+            Stroke::NONE,
+        ));
     }
 }
 
@@ -267,18 +211,12 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             let painter = ui.ctx().layer_painter(egui::LayerId::background());
             let icons = [
-                Icon::Select,
-                Icon::Rectangle,
-                Icon::Ellipse,
+                Icon::Shapes,
                 Icon::Arrow,
-                Icon::Line,
                 Icon::Pencil,
                 Icon::Marker,
                 Icon::Text,
-                Icon::Number,
                 Icon::Mosaic,
-                Icon::Blur,
-                Icon::Magnifier,
                 Icon::Eraser,
                 Icon::Undo,
                 Icon::Redo,
@@ -286,9 +224,6 @@ mod tests {
                 Icon::Save,
                 Icon::Pin,
                 Icon::Cancel,
-                Icon::Stroke(1),
-                Icon::Stroke(3),
-                Icon::Stroke(6),
             ];
             for (index, icon) in icons.into_iter().enumerate() {
                 let rect =

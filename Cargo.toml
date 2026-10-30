@@ -34,18 +34,26 @@ eframe = { version = "0.37", default-features = false, features = [
 egui = "0.37"
 futures-lite = "2"
 image = { version = "0.25", default-features = false, features = ["png"] }
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
 jiff = "0.2"
 pipewire = { version = "0.10", features = ["v0_3_44"] }
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 thiserror = "2"
+toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 winit = "0.30"
-x11rb = { version = "0.13", features = ["randr", "shm", "xfixes", "shape"] }
+x11rb = { version = "0.14", features = ["randr", "shm", "xfixes", "shape"] }
 zbus = "6"
 
+[profile.dev]
+incremental = true # Compile your binary in smaller steps.
+
 [profile.release]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
-strip = "symbols"
+codegen-units = 1  # Allows LLVM to perform better optimization.
+lto = true         # Enables link-time-optimizations.
+opt-level = "s"    # Prioritizes small binary size. Use `3` if you prefer speed.
+panic = "abort"    # Higher performance by disabling panic handlers.
+strip = true       # Ensures debug symbols are removed.

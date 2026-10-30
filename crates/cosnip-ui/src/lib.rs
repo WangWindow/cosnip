@@ -3,5 +3,7 @@
 
 mod app;
 mod icons;
+mod settings;
 
-pub use app::{Outcome, UiOptions, run, run_pin};
+pub use app::{Outcome, UiOptions, UiStyle, run, run_pin};
+pub use settings::{SettingsOutcome, run_settings};

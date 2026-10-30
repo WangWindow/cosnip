@@ -14,9 +14,9 @@ Use the icon toolbar under the selection (hover an icon for its name and hint):
 - **Pencil / Marker** — freehand; marker is translucent and thicker.
 - **Text** — click, type in the inline editor, Enter to place, Escape to cancel.
 - **No.** — click to place the next number.
-- **Mosaic / Blur** — drag a region.
+- **Mosaic / Blur** — drag a freehand brush stroke.
 - **Zoom** — click to place a magnifier.
-- **Eraser** — click an annotation to remove it.
+- **Eraser** — drag to remove annotation pixels; the underlying screenshot is preserved.
 - Palette and `1px/3px/6px` set the style of new annotations.
 - **Undo/Redo** or Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y.
 - **Copy / Save / Pin** render annotations into the output.
@@ -53,5 +53,5 @@ must contain the text. CJK requires a system CJK font (for example Noto Sans CJK
 
 - Annotations cannot be moved/rotated/restyled after commit; use undo or the eraser.
 - Preview text uses egui fonts; output uses cosmic-text/system fonts and can differ slightly.
-- Mosaic/blur previews are approximations; output is exact.
+- Mosaic/blur previews use the same stroke mask and block grid as the output; blur preview is a block approximation.
 - IME needs an interactive session check.

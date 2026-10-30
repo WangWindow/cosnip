@@ -18,6 +18,8 @@ fn help_lists_snip_and_paste() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("snip"));
     assert!(text.contains("paste"));
+    assert!(text.contains("settings"));
+    assert!(text.contains("tray"));
     assert!(text.contains("doctor"));
 }
 

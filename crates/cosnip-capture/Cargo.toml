@@ -10,6 +10,7 @@ description = "Desktop capture backends for Cosnip"
 cosnip-core = { path = "../cosnip-core" }
 async-io = { workspace = true, optional = true }
 futures-lite = { workspace = true, optional = true }
+image.workspace = true
 pipewire = { workspace = true, optional = true }
 tempfile.workspace = true
 thiserror.workspace = true

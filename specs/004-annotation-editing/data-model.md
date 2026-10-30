@@ -3,7 +3,7 @@
 ## Tool
 
 `Select`, `Rectangle`, `Ellipse`, `Arrow`, `Line`, `Pencil`, `Marker`, `Text`, `Number`, `Mosaic`,
-`Blur`, `Magnifier`, `Eraser`.
+`Blur`, `Magnifier`, `Eraser`. Mosaic, blur, and eraser are continuous-brush tools.
 
 `Tool::ALL` defines toolbar order. `is_draw_tool` excludes Select/Eraser; `is_rect_drag_tool`
 covers rect/ellipse/mosaic/blur.
@@ -28,7 +28,7 @@ tests use point-to-segment distance.
 | Pencil / Marker | `points: Vec<Point>` |
 | Text | `position`, `text`, `size` |
 | Number | `position`, `value` |
-| Mosaic / Blur | `rect` |
+| Mosaic / Blur / Eraser | `points: Vec<Point>` |
 | Magnifier | `center`, `radius`, `zoom` |
 
 ## AnnotationDocument
