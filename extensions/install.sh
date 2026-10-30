@@ -2,9 +2,12 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-target="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/cosnip@cosnip"
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+target="$data_home/gnome-shell/extensions/cosnip@cosnip"
+legacy="$data_home/gnome-shell/extensions/cosnip-pins@cosnip"
 
 mkdir -p "$(dirname "$target")"
+rm -rf "$legacy"
 rm -rf "$target"
 cp -r "$here/cosnip@cosnip" "$target"
 glib-compile-schemas "$target/schemas"
