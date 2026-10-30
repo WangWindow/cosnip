@@ -2,27 +2,30 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-target="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/cosnip-pins@cosnip"
+target="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/cosnip@cosnip"
 
 mkdir -p "$(dirname "$target")"
 rm -rf "$target"
-cp -r "$here/cosnip-pins@cosnip" "$target"
+cp -r "$here/cosnip@cosnip" "$target"
+glib-compile-schemas "$target/schemas"
 
 if command -v gnome-extensions >/dev/null 2>&1; then
-    gnome-extensions enable cosnip-pins@cosnip || true
+    gnome-extensions disable cosnip-pins@cosnip >/dev/null 2>&1 || true
+    gnome-extensions enable cosnip@cosnip >/dev/null 2>&1 || true
 fi
 
-# gnome-extensions cannot enable a newly copied extension until the Shell has
-# scanned it (normally at login), so also record it in the enabled list.
+# New extensions are only scanned by the Shell at login. Record the new UUID
+# and drop the legacy pin extension from the enabled list.
 if command -v gsettings >/dev/null 2>&1; then
     enabled="$(gsettings get org.gnome.shell enabled-extensions 2>/dev/null || echo '[]')"
-    if ! printf '%s' "$enabled" | grep -q 'cosnip-pins@cosnip'; then
+    enabled="$(printf '%s' "$enabled" | sed "s/, 'cosnip-pins@cosnip'//g; s/'cosnip-pins@cosnip', //g")"
+    if ! printf '%s' "$enabled" | grep -q 'cosnip@cosnip'; then
         case "$enabled" in
             "[]"|"@as []"|"")
-                enabled="['cosnip-pins@cosnip']"
+                enabled="['cosnip@cosnip']"
                 ;;
             *)
-                enabled="$(printf '%s' "$enabled" | sed "s/]$/, 'cosnip-pins@cosnip']/")"
+                enabled="$(printf '%s' "$enabled" | sed "s/]$/, 'cosnip@cosnip']/")"
                 ;;
         esac
         gsettings set org.gnome.shell enabled-extensions "$enabled" || true
@@ -30,14 +33,13 @@ if command -v gsettings >/dev/null 2>&1; then
 fi
 
 cat <<EOF
-Installed Cosnip Pins to:
+Installed the native Cosnip extension to:
   $target
 
-If the extension does not appear immediately, log out and back in
-(GNOME on Wayland cannot reload the Shell in place), then run:
-  gnome-extensions enable cosnip-pins@cosnip
+Log out and back in so GNOME Shell scans the new extension, then check:
+  gnome-extensions info cosnip@cosnip
+  gsettings get org.gnome.shell.extensions.cosnip snip-shortcut
 
-Cosnip uses it automatically when it is running:
-  [pin]
-  backend = "auto"    # auto | shell | window
+Defaults: F1 snip, F3 paste-as-pin.
+Preferences: gnome-extensions prefs cosnip@cosnip
 EOF

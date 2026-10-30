@@ -1,7 +1,0 @@
-{
-  "uuid": "cosnip-pins@cosnip",
-  "name": "Cosnip Pins",
-  "description": "Native, always-on-top pins for Cosnip. Uses Shell actors instead of XWayland windows so pinned screenshots stay sharp on scaled displays.",
-  "shell-version": ["48", "49", "50", "51"],
-  "version": 1
-}

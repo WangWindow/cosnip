@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <enum id="org.gnome.shell.extensions.cosnip.default-output">
+    <value nick="copy" value="0"/>
+    <value nick="save" value="1"/>
+    <value nick="pin" value="2"/>
+  </enum>
+  <enum id="org.gnome.shell.extensions.cosnip.cursor-mode">
+    <value nick="auto" value="0"/>
+    <value nick="always" value="1"/>
+    <value nick="hidden" value="2"/>
+  </enum>
+  <schema id="org.gnome.shell.extensions.cosnip"
+          path="/org/gnome/shell/extensions/cosnip/">
+    <key name="snip-shortcut" type="as">
+      <default>['F1']</default>
+      <summary>Snip shortcut</summary>
+    </key>
+    <key name="paste-shortcut" type="as">
+      <default>['F3']</default>
+      <summary>Paste-as-pin shortcut</summary>
+    </key>
+    <key name="default-output" enum="org.gnome.shell.extensions.cosnip.default-output">
+      <default>'copy'</default>
+      <summary>Default output action</summary>
+    </key>
+    <key name="save-dir" type="s">
+      <default>''</default>
+      <summary>Save directory; empty uses Pictures</summary>
+    </key>
+    <key name="filename" type="s">
+      <default>'Cosnip_%Y-%m-%d_%H-%M-%S.png'</default>
+      <summary>File name pattern</summary>
+    </key>
+    <key name="show-tips" type="b">
+      <default>true</default>
+      <summary>Show the keyboard tips panel</summary>
+    </key>
+    <key name="magnifier" type="b">
+      <default>true</default>
+      <summary>Show the pixel magnifier</summary>
+    </key>
+    <key name="cursor-mode" enum="org.gnome.shell.extensions.cosnip.cursor-mode">
+      <default>'auto'</default>
+      <summary>Cursor visibility</summary>
+    </key>
+    <key name="annotation-color" type="s">
+      <default>'#FF4040'</default>
+      <summary>Default annotation color</summary>
+    </key>
+    <key name="annotation-width" type="i">
+      <default>3</default>
+      <range min="1" max="32"/>
+      <summary>Default annotation line width</summary>
+    </key>
+    <key name="font-size" type="i">
+      <default>20</default>
+      <range min="6" max="96"/>
+      <summary>Default text size</summary>
+    </key>
+    <key name="pin-zoom-step" type="d">
+      <default>0.002</default>
+      <range min="0.0001" max="0.05"/>
+      <summary>Pin wheel zoom multiplier</summary>
+    </key>
+  </schema>
+</schemalist>

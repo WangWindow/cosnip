@@ -1,0 +1,51 @@
+.cosnip-toolbar {
+    background-color: rgba(236, 236, 236, 0.98);
+    border: 1px solid rgba(0, 0, 0, 0.38);
+    border-radius: 4px;
+    padding: 1px 3px;
+    spacing: 0;
+}
+
+.cosnip-tool-button {
+    border-radius: 3px;
+    padding: 4px;
+}
+
+.cosnip-tool-button:hover {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+.cosnip-tool-active {
+    background-color: #3468b2;
+}
+
+.cosnip-separator {
+    background-color: rgba(0, 0, 0, 0.18);
+    margin: 0 4px;
+}
+
+.cosnip-size-badge {
+    background-color: rgba(236, 236, 236, 0.98);
+    color: #202020;
+    border: 1px solid rgba(0, 0, 0, 0.38);
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.cosnip-tips {
+    background-color: rgba(0, 0, 0, 0.78);
+    color: white;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+}
+
+.cosnip-text-entry {
+    background-color: rgba(0, 0, 0, 0.35);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 2px;
+    padding: 2px 4px;
+}

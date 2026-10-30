@@ -1,71 +1,52 @@
-# Native GNOME Shell path
+# Native GNOME Shell implementation
 
-This note records the feasibility of replacing the external Cosnip process with a
-GNOME Shell extension on GNOME Wayland.
+The primary Cosnip implementation is now `extensions/cosnip@cosnip`. It runs
+entirely inside GNOME Shell.
 
-## Feasibility
+## Capture
 
-The Shell already contains the required primitives. In GNOME Shell 51,
-`/org/gnome/shell/ui/screenshot.js` uses:
+The extension uses the same internal API as GNOME's screenshot UI:
 
-- `Shell.Screenshot.screenshot_stage_to_content()` to capture the whole stage,
-  including the cursor content and scale.
-- `Shell.Screenshot.screenshot_area()` / `screenshot_window()` for focused
-  captures.
-- `Shell.Screenshot.composite_to_stream()` to encode the result.
-- `Main.wm.addKeybinding()` to receive a desktop shortcut.
-- `Shell.Screenshot` is callable from an extension because it runs inside the
-  Shell process, so it does not need the portal's screenshot permission.
+- `Shell.Screenshot.screenshot_stage_to_content()` for the stage and cursor.
+- `Shell.Screenshot.composite_to_stream()` for a pixbuf of a selected region.
+- `Main.wm.addKeybinding()` for global shortcuts.
 
-A pure extension can therefore:
+Because the extension runs inside the Shell, these calls do not require the
+portal screenshot permission, PipeWire, or XWayland.
 
-1. Capture the stage natively on a keybinding.
-2. Put the captured `Clutter.Content` into a fullscreen `St.Widget` overlay.
-3. Draw the selection, dim mask, toolbar, and annotations with Clutter/Cairo.
-4. Export with `composite_to_stream`, copy with `St.Clipboard`, or create a pin
-   actor with `St.ImageContent` (the existing `cosnip-pins` mechanism).
-5. Register its own shortcuts through a small GSettings schema.
+## Overlay and annotations
 
-## Problems this solves
+- The captured `Clutter.Content` is attached to a fullscreen `St.Widget`.
+- A `St.DrawingArea` paints the dim mask, selection border, handles, and
+  annotations with Cairo.
+- Input is handled by the overlay actor inside a `Main.pushModal()` grab, so it
+  gets global pointer and keyboard focus across monitors.
+- Mosaic/blur/eraser use the same freehand stroke mask in preview and output.
+- Text uses `St.Entry` while editing and Pango/Cairo for export.
+- Copy/save/pin composite the screenshot pixbuf and the same annotation renderer
+  into a Cairo surface.
 
-- No XWayland surface for the overlay or pins, so no resampling blur.
-- One stage-coordinate space handles pointer movement across monitors and mixed
-  DPI layouts.
-- Pins are native Shell actors and are always above normal windows.
-- No PipeWire, portal, X11, or external helper process is required.
-- No GNOME Settings custom-shortcut setup; the extension owns its keybindings.
+## Pins
 
-## Costs and remaining hard problems
+Pins are `St.ImageContent` actors added to the Shell chrome. They use native
+RGBA textures, stay above normal windows, and never pass through XWayland.
 
-- **Annotation rendering**: the current Rust renderer (cosmic-text, pixel
-  effects, mosaics) must be reimplemented in Cairo/GJS. Text input and CJK/IME
-  are possible with `St.Entry` and Pango, but this is a significant port.
-- **Export compositing**: annotations live in Shell actors; exporting must
-  render the same scene into a Cairo image surface instead of grabbing the
-  screen, or the toolbar and dim mask would leak into the output.
-- **Shell main-loop cost**: full-stage textures and per-pixel effects must not
-  block the compositor. Large annotations need async/chunked work.
-- **Stability**: a JavaScript error or allocation spike can degrade or crash the
-  entire GNOME Shell, not just a helper process.
-- **Compatibility**: Shell APIs and styles change between GNOME releases; the
-  extension must track them.
-- **Platform scope**: GNOME-only. X11 and other Wayland desktops would still
-  need the external app.
+## Configuration
 
-## Recommended path
+Settings live in `org.gnome.shell.extensions.cosnip` (GSettings). The
+`gnome-extensions prefs cosnip@cosnip` window edits shortcuts, annotation
+defaults, output behavior, and pin zoom.
 
-Keep the current hybrid for now:
+## Automation
 
-- Rust app: capture, annotation editing, output, X11 fallback.
-- `cosnip-pins@cosnip`: native pins on GNOME, with automatic window fallback.
+`org.cosnip.Native` at `/org/cosnip/Native` exposes `Snip`, `Paste`, `Ping`,
+`Count`, and test/automation helpers for area capture, selection, annotations,
+and saving.
 
-If a fully native experience is required, build a separate
-`cosnip-native@cosnip` prototype in stages:
+## Boundaries
 
-1. Keybinding + `screenshot_stage_to_content` + native selection overlay.
-2. Copy/save/pin of the selection without annotations.
-3. Rectangle/arrow/text annotations and Cairo export.
-4. Mosaic/blur/eraser and the remaining annotation tools.
-5. Extension preferences UI using `ExtensionPreferences`.
-
-This keeps the existing app usable while the native path is validated.
+- GNOME only; X11 and other desktops use the legacy standalone app.
+- Annotation rendering is implemented in GJS/Cairo rather than the Rust imaging
+  crate.
+- A Shell extension runs in the compositor process, so errors must be contained
+  with normal exception handling; the legacy app remains available as a fallback.

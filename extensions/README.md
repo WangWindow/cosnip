@@ -1,21 +1,32 @@
-# Cosnip GNOME Shell extension
+# Cosnip native GNOME extension
 
-`cosnip-pins@cosnip` provides native, always-on-top pins on GNOME.
+`cosnip@cosnip` is the primary Cosnip implementation. It captures, annotates,
+copies, saves, and pins entirely inside GNOME Shell.
 
-## Why an extension is required
+## Why an extension
 
-GNOME does not support the `wlr-layer-shell` protocol, and an ordinary
-`xdg_toplevel` has no portable always-on-top hint on Wayland. Drawing the pin
-inside the Shell is the only way to get all of:
+GNOME does not support `wlr-layer-shell`, and a normal `xdg_toplevel` cannot be
+made reliably always-on-top. The Shell already has the native screenshot API
+used by GNOME's own screenshot UI:
 
-- native-resolution display with no XWayland resampling,
-- always-on-top stacking,
-- a free-floating position across monitors,
-- drag and scroll-zoom input.
+- `Shell.Screenshot.screenshot_stage_to_content()`
+- `Shell.Screenshot.screenshot_area()`
+- `Shell.Screenshot.composite_to_stream()`
 
-The extension owns a `St.ImageContent` actor and exposes a small D-Bus service
-at `org.cosnip.Pins`. Cosnip sends the rendered RGBA image directly; no
-temporary PNG or X11 window is involved.
+Using these from an extension avoids XWayland, PipeWire, portals, and an
+external binary. The same stage coordinate space handles mixed-DPI monitors,
+global pointer movement, and always-on-top pin actors.
+
+## Features
+
+- F1 snip, F3 paste clipboard image as a pin (configurable)
+- Selection with eight resize handles and a pixel-size badge
+- Toolbar: rectangle/ellipse group, arrow, pencil, highlighter, mosaic/blur,
+  text, eraser, undo/redo, cancel, pin, save, copy
+- Native pins with drag, wheel zoom, and right-click close
+- GSettings-backed preferences
+- D-Bus automation interface `org.cosnip.Native`
+- No external process, PipeWire, XWayland, or portal capture permission
 
 ## Install
 
@@ -23,33 +34,43 @@ temporary PNG or X11 window is involved.
 ./extensions/install.sh
 ```
 
-If GNOME does not load it immediately, log out and back in, then enable it:
+Log out and back in so GNOME Shell scans a newly copied extension, then verify:
 
 ```bash
-gnome-extensions enable cosnip-pins@cosnip
+gnome-extensions info cosnip@cosnip
+gnome-extensions prefs cosnip@cosnip
 ```
 
-On GNOME, the AppIndicator extension is unrelated; this extension is separate.
+If it is not enabled automatically:
 
-## Use
-
-Choose the backend in `~/.config/cosnip/config.toml`:
-
-```toml
-[pin]
-backend = "auto"    # auto | shell | window
+```bash
+gnome-extensions enable cosnip@cosnip
 ```
 
-- `auto` uses the extension when its D-Bus name is present, otherwise falls
-  back to the XWayland pin window.
-- `shell` requires the extension and reports an error if it is unavailable.
-- `window` always uses the XWayland pin window.
+## Shortcuts
 
-Pins support:
+Default global shortcuts are `F1` (snip) and `F3` (paste as pin). Change them
+in the extension preferences or with `gsettings`:
 
-- drag with the left mouse button,
-- zoom with the scroll wheel,
-- right-click to close.
+```bash
+gsettings set org.gnome.shell.extensions.cosnip snip-shortcut "['F1']"
+gsettings set org.gnome.shell.extensions.cosnip paste-shortcut "['F3']"
+```
 
-Pins stay above normal windows and below GNOME Shell chrome. They are hidden
-in the overview.
+## D-Bus
+
+The extension exports `org.cosnip.Native` at `/org/cosnip/Native`:
+
+```bash
+gdbus call --session --dest org.cosnip.Native \
+  --object-path /org/cosnip/Native \
+  --method org.cosnip.Native.Snip
+```
+
+Other methods: `Paste`, `Ping`, `Count`, `CaptureArea`, `SnipArea`.
+
+## Legacy standalone app
+
+The Rust/eframe implementation is preserved at tag
+`legacy-software-v0.1.0`. It remains useful for X11 and non-GNOME desktops, but
+it is no longer the primary GNOME path.
