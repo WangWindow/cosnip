@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <enum id="org.gnome.shell.extensions.cosnip.default-output">
+    <value nick="copy" value="0"/>
+    <value nick="save" value="1"/>
+    <value nick="pin" value="2"/>
+  </enum>
+  <schema id="org.gnome.shell.extensions.cosnip"
+          path="/org/gnome/shell/extensions/cosnip/">
+    <key name="snip-shortcut" type="as">
+      <default>['F1']</default>
+      <summary>Snip shortcut</summary>
+    </key>
+    <key name="paste-shortcut" type="as">
+      <default>['F3']</default>
+      <summary>Paste-as-pin shortcut</summary>
+    </key>
+    <key name="default-output" enum="org.gnome.shell.extensions.cosnip.default-output">
+      <default>'copy'</default>
+      <summary>Action for Enter</summary>
+    </key>
+    <key name="save-dir" type="s">
+      <default>''</default>
+      <summary>Save directory; empty uses Pictures</summary>
+    </key>
+    <key name="filename" type="s">
+      <default>'Cosnip_%Y-%m-%d_%H-%M-%S.png'</default>
+      <summary>File name pattern</summary>
+    </key>
+    <key name="show-tips" type="b">
+      <default>true</default>
+      <summary>Show the keyboard tips panel</summary>
+    </key>
+    <key name="magnifier" type="b">
+      <default>true</default>
+      <summary>Show the pixel magnifier</summary>
+    </key>
+    <key name="auto-detect-windows" type="b">
+      <default>true</default>
+      <summary>Highlight the window under the pointer</summary>
+    </key>
+    <key name="pin-opacity" type="i">
+      <default>100</default>
+      <range min="10" max="100"/>
+      <summary>Default pin opacity</summary>
+    </key>
+  </schema>
+</schemalist>

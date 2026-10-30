@@ -24,7 +24,7 @@ that captures, annotates, copies, saves, and pins natively.
 - Selection, move, resize, and annotation tools work with a real pointer.
 - Copy, save, and pin produce the selected region with annotations.
 - Pins are image-sized Shell actors with drag, zoom, and right-click close.
-- Preferences open with `gnome-extensions prefs cosnip@cosnip`.
+- Preferences open with `gnome-extensions prefs cosnip@choco2233`.
 - No XWayland window is created for the overlay or pins.
 
 ## Non-goals

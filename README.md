@@ -1,37 +1,14 @@
 # Cosnip
 
-Cosnip is a screenshot, annotation, and pin tool for GNOME. The primary
-implementation is now a **native GNOME Shell extension**: capture, overlay,
-annotations, clipboard, saving, and pins all run inside the compositor. There is
-no external process, XWayland overlay, PipeWire capture, or portal screenshot
-permission on GNOME.
+A native GNOME Shell screenshot, annotation, and pin tool by **choco2233**.
+It runs entirely inside GNOME Shell with no X11/XWayland dependency.
 
-The previous standalone Rust/eframe application is preserved at tag
+The previous Rust application is available at tag
 [`legacy-software-v0.1.0`](https://github.com/WangWindow/cosnip/releases/tag/legacy-software-v0.1.0).
-
-## Features
-
-- Native stage capture through `Shell.Screenshot`
-- Selection with eight resize handles and a size badge
-- Window detection: hover highlight and click-to-select; Tab toggles
-- Pixel magnifier with grid, coordinates, and color value
-- Selection border/mask/anchor colors and widths
-- Toolbar: rectangle/ellipse/line group, arrow, pencil, highlighter,
-  mosaic/blur, text, eraser, undo/redo, cancel, pin, save, copy
-- Number marks and magnifier annotations via N/G shortcuts
-- Freehand mosaic/blur and annotation-pixel eraser
-- Native pins: image-sized, always on top, border texture, opacity, drag,
-  wheel zoom, right-click close
-- GNOME-native preferences via `gnome-extensions prefs`
-- GSettings configuration and a D-Bus automation interface
-- Shortcut recorder in preferences (press the key combination, no text entry)
-- No XWayland resampling, so overlays and pins stay sharp on scaled displays
 
 ## Requirements
 
 - GNOME Shell 48–51 on Wayland
-- `glib-compile-schemas` (usually provided by GLib) to install
-- No Rust toolchain, PipeWire headers, portal, or X11 session
 
 ## Install
 
@@ -41,125 +18,54 @@ cd cosnip
 ./extensions/install.sh
 ```
 
-Log out and back in so GNOME Shell scans a newly copied extension. This is also
-required after updating an existing install; GNOME caches extension modules and
-GSettings schemas in the running Shell. Then verify:
+Log out and back in after installing or updating. GNOME Shell caches extension
+modules and settings schemas. Then check:
 
 ```bash
-gnome-extensions info cosnip@cosnip
+gnome-extensions info cosnip@choco2233
 ```
 
-If needed:
+Defaults: `F1` snip, `F3` paste an image as a pin. Configure shortcuts and
+options with:
 
 ```bash
-gnome-extensions enable cosnip@cosnip
+gnome-extensions prefs cosnip@choco2233
 ```
 
-Defaults: `F1` snip, `F3` paste clipboard image as a pin.
-
-## Use
-
-Open the preferences with:
-
-```bash
-gnome-extensions prefs cosnip@cosnip
-```
-
-Or change GSettings directly:
-
-```bash
-# Global shortcuts
-gsettings set org.gnome.shell.extensions.cosnip snip-shortcut "['F1']"
-gsettings set org.gnome.shell.extensions.cosnip paste-shortcut "['F3']"
-
-# Default output: copy | save | pin
-gsettings set org.gnome.shell.extensions.cosnip default-output 'copy'
-
-# Save directory and file name pattern
-gsettings set org.gnome.shell.extensions.cosnip save-dir "$HOME/Pictures"
-gsettings set org.gnome.shell.extensions.cosnip filename 'Cosnip_%Y-%m-%d_%H-%M-%S.png'
-
-# Annotation defaults
-gsettings set org.gnome.shell.extensions.cosnip annotation-color '#FF4040'
-gsettings set org.gnome.shell.extensions.cosnip annotation-width 3
-gsettings set org.gnome.shell.extensions.cosnip font-size 20
-```
-
-The extension also adds a camera icon to the top bar with
-**Snip / Paste / Close all pins / Preferences**.
-
-## Snip controls
+## Controls
 
 | Input | Action |
 |---|---|
-| Drag | Create a selection |
-| Drag inside the selection | Move it |
-| Drag a handle | Resize it |
-| Shift while dragging | Keep a square |
-| Arrow keys | Nudge the selection |
-| Ctrl+A | Select the whole desktop |
-| R / C / L / A / B / H / M / T / N / G / E / V | Rectangle, ellipse, line, arrow, pencil, highlighter, mosaic, text, number, magnifier, eraser, select |
-| Tab | Toggle window detection |
-| Right-click while annotating | Finish or leave the current tool |
-| Enter | Run the configured default output (copy by default) |
-| Ctrl+C | Copy |
-| Ctrl+S | Save |
-| P | Pin |
-| Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
-| Escape | Cancel the current tool, then the overlay |
+| Drag | Select an area |
+| Drag inside / a handle | Move / resize the selection |
+| `Shift` + drag | Square selection |
+| Arrow keys, `Ctrl+A` | Nudge, select the whole screen |
+| `Tab` | Toggle window detection |
+| `Enter` | Default output (copy by default) |
+| `Ctrl+C` / `Ctrl+S` / `P` | Copy / save / pin |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
+| `Esc` | Cancel tool, then close |
 
-Pins support drag, wheel zoom, and right-click close.
+Switch annotation tools by clicking the toolbar; tool keys are intentionally not
+bound. Click the color or width button for a picker, and use the mouse button in
+the toolbar to include or exclude the captured cursor. Pins support drag, wheel
+zoom, and right-click close. There is no panel/tray menu; use the shortcut,
+preferences, or D-Bus.
 
-## D-Bus automation
-
-The extension exports `org.cosnip.Native` at `/org/cosnip/Native`:
+## D-Bus
 
 ```bash
 gdbus call --session --dest org.cosnip.Native \
   --object-path /org/cosnip/Native \
   --method org.cosnip.Native.Snip
-
-gdbus call --session --dest org.cosnip.Native \
-  --object-path /org/cosnip/Native \
-  --method org.cosnip.Native.Paste
 ```
 
-Methods: `Snip`, `Paste`, `Ping`, `Count`, `CaptureArea`, `SnipArea`,
-`SetSelection`, `AddRect`, `AddMosaic`, `AddEraser`, `AddText`,
-`SaveSelection`, `PinSelection`, `CaptureStage`, `CloseOverlay`. The
-`TestPress`/`TestMotion` methods are used by the headless verification suite.
+Other methods include `Paste`, `Ping`, `CaptureArea`, and `SnipArea`.
 
-## How it works
+## Documentation
 
-- `Shell.Screenshot.screenshot_stage_to_content()` captures the stage and cursor
-  natively.
-- The overlay is a Shell actor with Cairo rendering, so the preview never goes
-  through XWayland.
-- The selected region is composited into a Cairo image surface for copy/save/pin.
-  The same annotation renderer is used for the preview and the output.
-- Pins are `St.ImageContent` actors in the Shell UI layer.
-- Configuration lives in the extension GSettings schema.
-
-See [`extensions/README.md`](extensions/README.md),
-[`docs/gnome-native-extension.md`](docs/gnome-native-extension.md), and the
-[Snipaste parity matrix](docs/snipaste-parity.md).
-
-## Legacy standalone app
-
-The previous implementation and its optional pin extension are preserved at tag
-`legacy-software-v0.1.0`. Use it when you need:
-
-- X11/Xorg support
-- non-GNOME Wayland desktops
-- the external `cosnip` CLI
-- the previous TOML settings window
-
-Build from that tag:
-
-```bash
-git checkout legacy-software-v0.1.0
-cargo build --release -p cosnip-app
-```
+- [Native extension details](extensions/README.md)
+- [Snipaste parity matrix](docs/snipaste-parity.md)
 
 ## License
 

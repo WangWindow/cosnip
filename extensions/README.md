@@ -1,6 +1,6 @@
 # Cosnip native GNOME extension
 
-`cosnip@cosnip` is the primary Cosnip implementation. It captures, annotates,
+`cosnip@choco2233` is the primary Cosnip implementation. It captures, annotates,
 copies, saves, and pins entirely inside GNOME Shell.
 
 ## Why an extension
@@ -13,8 +13,8 @@ used by GNOME's own screenshot UI:
 - `Shell.Screenshot.screenshot_area()`
 - `Shell.Screenshot.composite_to_stream()`
 
-Using these from an extension avoids XWayland, PipeWire, portals, and an
-external binary. The same stage coordinate space handles mixed-DPI monitors,
+Using these from an extension avoids X11/XWayland, PipeWire, portals, and
+an external binary. The same stage coordinate space handles mixed-DPI monitors,
 global pointer movement, and always-on-top pin actors.
 
 ## Features
@@ -22,15 +22,18 @@ global pointer movement, and always-on-top pin actors.
 - F1 snip, F3 paste clipboard image as a pin (configurable)
 - Selection with eight resize handles and a pixel-size badge
 - Window detection with hover highlight and click-to-select (Tab toggles)
-- Pixel magnifier, selection border/mask/anchor settings
-- Toolbar: rectangle/ellipse/line group, arrow, pencil, highlighter,
-  mosaic/blur, text, eraser, undo/redo, cancel, pin, save, copy
-- Number and magnifier annotations via N/G
+- Pixel magnifier with fixed grid and coordinate readout
+- Toolbar: rectangle, line, arrow, pencil, highlighter, mosaic/blur, text,
+  magnifier, eraser, cursor toggle, undo/redo, cancel, pin, save, copy
+- Native symbolic icons and St widgets; Adwaita/GTK4 preferences
 - Native pins with border texture, opacity, drag, wheel zoom, and right-click close
+- Toolbar-only tool switching (no keyboard tool bindings)
+- Color and line-width pickers in the toolbar
 - Shortcut recorder in preferences
 - GSettings-backed preferences
+- No panel/tray icon; use the shortcut, preferences, or D-Bus
 - D-Bus automation interface `org.cosnip.Native`
-- No external process, PipeWire, XWayland, or portal capture permission
+- No external process, PipeWire, X11/XWayland, or portal capture permission
 
 ## Install
 
@@ -43,14 +46,14 @@ an existing install also requires a re-login because the running Shell caches
 extension modules and schemas. Then verify:
 
 ```bash
-gnome-extensions info cosnip@cosnip
-gnome-extensions prefs cosnip@cosnip
+gnome-extensions info cosnip@choco2233
+gnome-extensions prefs cosnip@choco2233
 ```
 
 If it is not enabled automatically:
 
 ```bash
-gnome-extensions enable cosnip@cosnip
+gnome-extensions enable cosnip@choco2233
 ```
 
 ## Shortcuts

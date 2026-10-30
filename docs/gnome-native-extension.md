@@ -1,24 +1,25 @@
 # Native GNOME Shell implementation
 
-The primary Cosnip implementation is now `extensions/cosnip@cosnip`. It runs
+The primary Cosnip implementation is now `extensions/cosnip@choco2233`. It runs
 entirely inside GNOME Shell.
 
 ## Capture
 
 The extension uses the same internal API as GNOME's screenshot UI:
 
-- `Shell.Screenshot.screenshot_stage_to_content()` for the stage and cursor.
+- `Shell.Screenshot.screenshot_stage_to_content()` for the stage.
 - `Shell.Screenshot.composite_to_stream()` for a pixbuf of a selected region.
 - `Main.wm.addKeybinding()` for global shortcuts.
 
 Because the extension runs inside the Shell, these calls do not require the
-portal screenshot permission, PipeWire, or XWayland.
+portal screenshot permission, PipeWire, X11, or XWayland.
 
 ## Overlay and annotations
 
 - The captured `Clutter.Content` is attached to a fullscreen `St.Widget`.
-- A `St.DrawingArea` paints the dim mask, selection border, handles, and
-  annotations with Cairo.
+- Four lightweight `St.Widget` rectangles paint the mask outside the selection.
+  The border and handles are widgets; a selection-sized `St.DrawingArea` paints
+  annotations.
 - Input is handled by the overlay actor inside a `Main.pushModal()` grab, so it
   gets global pointer and keyboard focus across monitors.
 - Mosaic/blur/eraser use the same freehand stroke mask in preview and output.
@@ -29,13 +30,13 @@ portal screenshot permission, PipeWire, or XWayland.
 ## Pins
 
 Pins are `St.ImageContent` actors added to the Shell chrome. They use native
-RGBA textures, stay above normal windows, and never pass through XWayland.
+RGBA textures, stay above normal windows, and never pass through X11/XWayland.
 
 ## Configuration
 
 Settings live in `org.gnome.shell.extensions.cosnip` (GSettings). The
-`gnome-extensions prefs cosnip@cosnip` window edits shortcuts, annotation
-defaults, output behavior, and pin zoom.
+`gnome-extensions prefs cosnip@choco2233` window edits shortcuts, snip
+behavior, output behavior, and pin opacity.
 
 ## Automation
 

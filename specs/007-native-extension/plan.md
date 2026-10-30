@@ -3,7 +3,7 @@
 ## Structure
 
 ```text
-extensions/cosnip@cosnip/
+extensions/cosnip@choco2233/
   extension.js       entry point, keybindings, D-Bus, panel menu
   overlay.js         native selection and annotation UI
   annotations.js     tool model and Cairo preview/export
