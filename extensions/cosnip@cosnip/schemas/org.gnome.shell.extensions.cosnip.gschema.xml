@@ -10,6 +10,12 @@
     <value nick="always" value="1"/>
     <value nick="hidden" value="2"/>
   </enum>
+  <enum id="org.gnome.shell.extensions.cosnip.action">
+    <value nick="copy" value="0"/>
+    <value nick="save" value="1"/>
+    <value nick="pin" value="2"/>
+    <value nick="close" value="3"/>
+  </enum>
   <schema id="org.gnome.shell.extensions.cosnip"
           path="/org/gnome/shell/extensions/cosnip/">
     <key name="snip-shortcut" type="as">
@@ -40,6 +46,82 @@
       <default>true</default>
       <summary>Show the pixel magnifier</summary>
     </key>
+    <key name="auto-detect-windows" type="b">
+      <default>true</default>
+      <summary>Highlight the window under the pointer</summary>
+    </key>
+    <key name="hide-1x1" type="b">
+      <default>true</default>
+      <summary>Ignore 1x1 windows</summary>
+    </key>
+    <key name="capture-cursor" type="b">
+      <default>true</default>
+      <summary>Include the pointer in the captured image</summary>
+    </key>
+    <key name="border-width" type="i">
+      <default>2</default>
+      <range min="1" max="12"/>
+      <summary>Selection border width</summary>
+    </key>
+    <key name="border-color" type="s">
+      <default>'#3B82F6'</default>
+      <summary>Selection border color</summary>
+    </key>
+    <key name="mask-color" type="s">
+      <default>'#00000073'</default>
+      <summary>Mask color (RGBA hex)</summary>
+    </key>
+    <key name="show-anchors" type="b">
+      <default>true</default>
+      <summary>Show selection anchors</summary>
+    </key>
+    <key name="anchor-color" type="s">
+      <default>'#3B82F6'</default>
+      <summary>Anchor border color</summary>
+    </key>
+    <key name="magnifier-size" type="i">
+      <default>9</default>
+      <range min="3" max="21"/>
+      <summary>Magnifier grid size (odd)</summary>
+    </key>
+    <key name="magnifier-zoom" type="i">
+      <default>8</default>
+      <range min="2" max="20"/>
+      <summary>Magnifier pixel cell size</summary>
+    </key>
+    <key name="magnifier-grid" type="b">
+      <default>true</default>
+      <summary>Show magnifier pixel grid</summary>
+    </key>
+    <key name="magnifier-coords" type="b">
+      <default>true</default>
+      <summary>Show magnifier coordinates and color</summary>
+    </key>
+    <key name="enter-action" enum="org.gnome.shell.extensions.cosnip.action">
+      <default>'copy'</default>
+      <summary>Action for Enter</summary>
+    </key>
+    <key name="double-click-action" enum="org.gnome.shell.extensions.cosnip.action">
+      <default>'copy'</default>
+      <summary>Action for double-click</summary>
+    </key>
+    <key name="middle-click-action" enum="org.gnome.shell.extensions.cosnip.action">
+      <default>'pin'</default>
+      <summary>Action for middle-click</summary>
+    </key>
+    <key name="snip-history-size" type="i">
+      <default>8</default>
+      <range min="1" max="64"/>
+      <summary>Number of recent snip areas to remember</summary>
+    </key>
+    <key name="disable-scroll" type="b">
+      <default>false</default>
+      <summary>Disable mouse-wheel width changes</summary>
+    </key>
+    <key name="show-cross-lines" type="b">
+      <default>false</default>
+      <summary>Show fullscreen cross lines</summary>
+    </key>
     <key name="cursor-mode" enum="org.gnome.shell.extensions.cosnip.cursor-mode">
       <default>'auto'</default>
       <summary>Cursor visibility</summary>
@@ -62,6 +144,24 @@
       <default>0.002</default>
       <range min="0.0001" max="0.05"/>
       <summary>Pin wheel zoom multiplier</summary>
+    </key>
+    <key name="pin-opacity" type="i">
+      <default>100</default>
+      <range min="10" max="100"/>
+      <summary>Default pin opacity</summary>
+    </key>
+    <key name="pin-border-width" type="i">
+      <default>1</default>
+      <range min="0" max="8"/>
+      <summary>Pin border width</summary>
+    </key>
+    <key name="pin-border-color" type="s">
+      <default>'#0000008C'</default>
+      <summary>Pin border color</summary>
+    </key>
+    <key name="pin-zoom-at-pointer" type="b">
+      <default>false</default>
+      <summary>Zoom the pin around the pointer</summary>
     </key>
   </schema>
 </schemalist>

@@ -6,9 +6,9 @@ import Cogl from 'gi://Cogl';
 import St from 'gi://St';
 import cairo from 'cairo';
 
-export function parseColor(value) {
-    const text = (value || '#FF4040').replace('#', '');
-    const rgba = [255, 64, 64, 255];
+export function parseColor(value, fallback = [255, 64, 64, 255]) {
+    const text = (value || '').replace('#', '').trim();
+    const rgba = [...fallback];
     if (text.length === 6 || text.length === 8) {
         rgba[0] = parseInt(text.slice(0, 2), 16) || 0;
         rgba[1] = parseInt(text.slice(2, 4), 16) || 0;
@@ -64,12 +64,15 @@ export function copySurfaceToClipboard(surface) {
 
 export function pixbufToImageContent(pixbuf, width, height) {
     const content = St.ImageContent.new_with_preferred_size(width, height);
+    const source = pixbuf.get_has_alpha()
+        ? pixbuf
+        : pixbuf.add_alpha(false, 0, 0, 0);
     const args = [
-        GLib.Bytes.new(pixbuf.get_pixels()),
+        GLib.Bytes.new(source.get_pixels()),
         Cogl.PixelFormat.RGBA_8888,
-        pixbuf.get_width(),
-        pixbuf.get_height(),
-        pixbuf.get_rowstride(),
+        source.get_width(),
+        source.get_height(),
+        source.get_rowstride(),
     ];
     const cogl = global.stage.context
         ?.get_backend?.()

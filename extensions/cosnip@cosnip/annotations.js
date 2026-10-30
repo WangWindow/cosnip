@@ -9,11 +9,14 @@ export const Tool = {
     RECT: 'rect',
     ELLIPSE: 'ellipse',
     ARROW: 'arrow',
+    LINE: 'line',
     PENCIL: 'pencil',
     MARKER: 'marker',
     MOSAIC: 'mosaic',
     BLUR: 'blur',
     TEXT: 'text',
+    NUMBER: 'number',
+    MAGNIFIER: 'magnifier',
     ERASER: 'eraser',
 };
 
@@ -28,6 +31,7 @@ export function createAnnotation(tool, point, style) {
     case Tool.ELLIPSE:
         return {...base, x: point.x, y: point.y, w: 0, h: 0};
     case Tool.ARROW:
+    case Tool.LINE:
         return {...base, x1: point.x, y1: point.y, x2: point.x, y2: point.y};
     case Tool.PENCIL:
     case Tool.MARKER:
@@ -37,6 +41,8 @@ export function createAnnotation(tool, point, style) {
         return {...base, points: [point]};
     case Tool.TEXT:
         return {...base, x: point.x, y: point.y, text: '', size: style.fontSize};
+    case Tool.MAGNIFIER:
+        return {...base, x: point.x, y: point.y, radius: 48, zoom: 2};
     default:
         return null;
     }
@@ -66,6 +72,7 @@ export function updateAnnotation(annotation, point, shift) {
         break;
     }
     case Tool.ARROW:
+    case Tool.LINE:
         annotation.x2 = point.x;
         annotation.y2 = point.y;
         break;
@@ -91,7 +98,8 @@ export function annotationIsValid(annotation) {
     case Tool.RECT:
     case Tool.ELLIPSE:
         return annotation.w >= 1 && annotation.h >= 1;
-    case Tool.ARROW: {
+    case Tool.ARROW:
+    case Tool.LINE: {
         const dx = annotation.x2 - annotation.x1;
         const dy = annotation.y2 - annotation.y1;
         return Math.hypot(dx, dy) >= 2;
@@ -104,6 +112,8 @@ export function annotationIsValid(annotation) {
         return annotation.points.length >= 2;
     case Tool.TEXT:
         return annotation.text.trim().length > 0;
+    case Tool.MAGNIFIER:
+        return true;
     default:
         return false;
     }
@@ -187,6 +197,13 @@ function drawVector(cr, annotation, options) {
     case Tool.ARROW:
         drawArrow(cr, annotation);
         break;
+    case Tool.LINE:
+        setColor(cr, annotation.color);
+        cr.setLineWidth(width);
+        cr.moveTo(annotation.x1, annotation.y1);
+        cr.lineTo(annotation.x2, annotation.y2);
+        cr.stroke();
+        break;
     case Tool.PENCIL:
         setColor(cr, annotation.color);
         strokePath(cr, annotation.points, width);
@@ -202,6 +219,12 @@ function drawVector(cr, annotation, options) {
         break;
     case Tool.BLUR:
         drawMosaic(cr, annotation, options, true);
+        break;
+    case Tool.NUMBER:
+        drawNumber(cr, annotation);
+        break;
+    case Tool.MAGNIFIER:
+        drawMagnifier(cr, annotation, options);
         break;
     case Tool.ERASER:
         drawEraser(cr, annotation, options);
@@ -274,6 +297,57 @@ function drawEraser(cr, annotation, options) {
     cr.clip();
     paintPixbuf(cr, source, 0, 0, 1 / (options.deviceScale || 1));
     cr.restore();
+}
+
+function drawNumber(cr, annotation) {
+    const radius = Math.max(12, Math.min(24, 14 + annotation.width));
+    cr.setSourceRGBA(
+        annotation.color[0] / 255, annotation.color[1] / 255,
+        annotation.color[2] / 255, annotation.color[3] / 255);
+    cr.arc(annotation.x, annotation.y, radius, 0, Math.PI * 2);
+    cr.fill();
+    cr.setSourceRGBA(1, 1, 1, 1);
+    cr.selectFontFace('Sans', cairo.FontSlant.NORMAL, cairo.FontWeight.BOLD);
+    cr.setFontSize(Math.max(14, radius * 1.4));
+    const text = String(annotation.value);
+    const extents = cr.textExtents(text);
+    cr.moveTo(annotation.x - extents.width / 2 - extents.x_bearing,
+        annotation.y - extents.height / 2 - extents.y_bearing);
+    cr.showText(text);
+}
+
+function drawMagnifier(cr, annotation, options) {
+    const source = options.sourcePixbuf;
+    if (!source)
+        return;
+    const scale = options.deviceScale || 1;
+    const radius = annotation.radius || 48;
+    const zoom = Math.max(1, annotation.zoom || 2);
+    const cell = 4;
+    cr.save();
+    cr.arc(annotation.x, annotation.y, radius, 0, Math.PI * 2);
+    cr.clip();
+    for (let dy = -radius; dy < radius; dy += cell) {
+        for (let dx = -radius; dx < radius; dx += cell) {
+            if (dx * dx + dy * dy > radius * radius)
+                continue;
+            const sx = Math.round((annotation.x + dx / zoom) * scale);
+            const sy = Math.round((annotation.y + dy / zoom) * scale);
+            const pixel = pixbufPixel(source, sx, sy);
+            cr.setSourceRGBA(
+                pixel[0] / 255, pixel[1] / 255, pixel[2] / 255, 1);
+            cr.rectangle(
+                annotation.x + dx, annotation.y + dy,
+                Math.min(cell, radius - dx),
+                Math.min(cell, radius - dy));
+            cr.fill();
+        }
+    }
+    cr.restore();
+    setColor(cr, annotation.color);
+    cr.setLineWidth(Math.max(1, annotation.width));
+    cr.arc(annotation.x, annotation.y, radius, 0, Math.PI * 2);
+    cr.stroke();
 }
 
 function drawText(cr, annotation) {

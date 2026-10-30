@@ -13,12 +13,18 @@ The previous standalone Rust/eframe application is preserved at tag
 
 - Native stage capture through `Shell.Screenshot`
 - Selection with eight resize handles and a size badge
-- Toolbar: rectangle/ellipse group, arrow, pencil, highlighter, mosaic/blur,
-  text, eraser, undo/redo, cancel, pin, save, copy
+- Window detection: hover highlight and click-to-select; Tab toggles
+- Pixel magnifier with grid, coordinates, and color value
+- Selection border/mask/anchor colors and widths
+- Toolbar: rectangle/ellipse/line group, arrow, pencil, highlighter,
+  mosaic/blur, text, eraser, undo/redo, cancel, pin, save, copy
+- Number marks and magnifier annotations via N/G shortcuts
 - Freehand mosaic/blur and annotation-pixel eraser
-- Native pins: image-sized, always on top, drag, wheel zoom, right-click close
+- Native pins: image-sized, always on top, border texture, opacity, drag,
+  wheel zoom, right-click close
 - GNOME-native preferences via `gnome-extensions prefs`
 - GSettings configuration and a D-Bus automation interface
+- Shortcut recorder in preferences (press the key combination, no text entry)
 - No XWayland resampling, so overlays and pins stay sharp on scaled displays
 
 ## Requirements
@@ -90,7 +96,8 @@ The extension also adds a camera icon to the top bar with
 | Shift while dragging | Keep a square |
 | Arrow keys | Nudge the selection |
 | Ctrl+A | Select the whole desktop |
-| R / C / A / B / H / M / T / E / V | Rectangle, ellipse, arrow, pencil, highlighter, mosaic, text, eraser, select |
+| R / C / L / A / B / H / M / T / N / G / E / V | Rectangle, ellipse, line, arrow, pencil, highlighter, mosaic, text, number, magnifier, eraser, select |
+| Tab | Toggle window detection |
 | Right-click while annotating | Finish or leave the current tool |
 | Enter | Run the configured default output (copy by default) |
 | Ctrl+C | Copy |
@@ -116,8 +123,9 @@ gdbus call --session --dest org.cosnip.Native \
 ```
 
 Methods: `Snip`, `Paste`, `Ping`, `Count`, `CaptureArea`, `SnipArea`,
-`SetSelection`, `AddRect`, `AddMosaic`, `AddEraser`, `SaveSelection`,
-`PinSelection`, `CloseOverlay`.
+`SetSelection`, `AddRect`, `AddMosaic`, `AddEraser`, `AddText`,
+`SaveSelection`, `PinSelection`, `CaptureStage`, `CloseOverlay`. The
+`TestPress`/`TestMotion` methods are used by the headless verification suite.
 
 ## How it works
 
@@ -130,8 +138,9 @@ Methods: `Snip`, `Paste`, `Ping`, `Count`, `CaptureArea`, `SnipArea`,
 - Pins are `St.ImageContent` actors in the Shell UI layer.
 - Configuration lives in the extension GSettings schema.
 
-See [`extensions/README.md`](extensions/README.md) and
-[`docs/gnome-native-extension.md`](docs/gnome-native-extension.md).
+See [`extensions/README.md`](extensions/README.md),
+[`docs/gnome-native-extension.md`](docs/gnome-native-extension.md), and the
+[Snipaste parity matrix](docs/snipaste-parity.md).
 
 ## Legacy standalone app
 

@@ -21,9 +21,13 @@ global pointer movement, and always-on-top pin actors.
 
 - F1 snip, F3 paste clipboard image as a pin (configurable)
 - Selection with eight resize handles and a pixel-size badge
-- Toolbar: rectangle/ellipse group, arrow, pencil, highlighter, mosaic/blur,
-  text, eraser, undo/redo, cancel, pin, save, copy
-- Native pins with drag, wheel zoom, and right-click close
+- Window detection with hover highlight and click-to-select (Tab toggles)
+- Pixel magnifier, selection border/mask/anchor settings
+- Toolbar: rectangle/ellipse/line group, arrow, pencil, highlighter,
+  mosaic/blur, text, eraser, undo/redo, cancel, pin, save, copy
+- Number and magnifier annotations via N/G
+- Native pins with border texture, opacity, drag, wheel zoom, and right-click close
+- Shortcut recorder in preferences
 - GSettings-backed preferences
 - D-Bus automation interface `org.cosnip.Native`
 - No external process, PipeWire, XWayland, or portal capture permission

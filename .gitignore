@@ -5,3 +5,6 @@ target
 # Local tooling caches
 **/__pycache__/
 *.pyc
+
+# GNOME extension build output
+**/gschemas.compiled

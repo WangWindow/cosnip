@@ -54,7 +54,8 @@ export const Toolbar = GObject.registerClass({
 
         this._addTool('shapes', ICONS.SHAPES, () => {
             this._shapeTool = this._shapeTool === Tool.RECT
-                ? Tool.ELLIPSE : Tool.RECT;
+                ? Tool.ELLIPSE
+                : this._shapeTool === Tool.ELLIPSE ? Tool.LINE : Tool.RECT;
             this._callbacks.onTool(this._shapeTool);
         });
         this._addTool('arrow', ICONS.ARROW, () => this._callbacks.onTool(Tool.ARROW));
@@ -108,7 +109,8 @@ export const Toolbar = GObject.registerClass({
 
     setTool(tool) {
         this._tool = tool;
-        this.setActive('shapes', tool === Tool.RECT || tool === Tool.ELLIPSE);
+        this.setActive('shapes', tool === Tool.RECT ||
+            tool === Tool.ELLIPSE || tool === Tool.LINE);
         this.setActive('arrow', tool === Tool.ARROW);
         this.setActive('pencil', tool === Tool.PENCIL);
         this.setActive('marker', tool === Tool.MARKER);
@@ -118,7 +120,8 @@ export const Toolbar = GObject.registerClass({
     }
 
     syncShape(tool) {
-        if (tool === Tool.RECT || tool === Tool.ELLIPSE)
+        if (tool === Tool.RECT || tool === Tool.ELLIPSE ||
+            tool === Tool.LINE)
             this._shapeTool = tool;
         this.setTool(tool);
     }
@@ -135,6 +138,23 @@ export const Toolbar = GObject.registerClass({
 
     setRedo(enabled) {
         this._redo?.setEnabled(enabled);
+    }
+
+    clickAt(point) {
+        if (!this.visible)
+            return false;
+        for (const child of this.get_children()) {
+            if (!(child instanceof St.Button) || !child.visible)
+                continue;
+            const [x, y] = child.get_transformed_position();
+            const [w, h] = child.get_transformed_size();
+            if (point.x >= x && point.x < x + w &&
+                point.y >= y && point.y < y + h) {
+                child.emit('clicked', child);
+                return true;
+            }
+        }
+        return false;
     }
 
     setStyle(color, width) {

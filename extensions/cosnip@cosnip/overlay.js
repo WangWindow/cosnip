@@ -1,6 +1,7 @@
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import cairo from 'cairo';
@@ -21,17 +22,20 @@ import {
     expandFilename,
     paintPixbuf,
     parseColor,
+    pixbufPixel,
     saveSurface,
     uniquePath,
 } from './util.js';
 
 const HANDLE_RADIUS = 6;
-const SELECTION_COLOR = [0.23, 0.51, 0.96, 1.0];
 
 export class NativeOverlay {
     constructor(options) {
         this._content = options.content;
         this._scale = options.scale || 1;
+        this._cursorContent = options.cursorContent ?? null;
+        this._cursorPoint = options.cursorPoint ?? null;
+        this._cursorScale = options.cursorScale ?? 1;
         this._settings = options.settings;
         this._onClose = options.onClose;
         this._onPin = options.onPin;
@@ -50,6 +54,28 @@ export class NativeOverlay {
         this._drag = null;
         this._textEntry = null;
         this._closed = false;
+        this._autoDetect = this._settings.get_boolean('auto-detect-windows');
+        this._hide1x1 = this._settings.get_boolean('hide-1x1');
+        this._borderWidth = this._settings.get_int('border-width');
+        this._borderColor = parseColor(this._settings.get_string('border-color'), [59, 130, 246, 255]);
+        this._maskColor = parseColor(this._settings.get_string('mask-color'), [0, 0, 0, 115]);
+        this._showAnchors = this._settings.get_boolean('show-anchors');
+        this._anchorColor = parseColor(this._settings.get_string('anchor-color'), [59, 130, 246, 255]);
+        this._magnifier = this._settings.get_boolean('magnifier');
+        this._magnifierSize = this._settings.get_int('magnifier-size');
+        this._magnifierZoom = this._settings.get_int('magnifier-zoom');
+        this._magnifierGrid = this._settings.get_boolean('magnifier-grid');
+        this._magnifierCoords = this._settings.get_boolean('magnifier-coords');
+        this._historySize = this._settings.get_int('snip-history-size');
+        this._disableScroll = this._settings.get_boolean('disable-scroll');
+        this._showCrossLines = this._settings.get_boolean('show-cross-lines');
+        this._history = [];
+        this._historyCursor = 0;
+        this._pointerPos = null;
+        this._lastClick = null;
+        this._nextNumber = 1;
+        this._hoverWindow = null;
+        this._windowList = [];
         this._root = null;
         this._toolbar = null;
         this._sizeBadge = null;
@@ -72,6 +98,44 @@ export class NativeOverlay {
 
     get actor() {
         return this._root;
+    }
+
+    get selection() {
+        return this._selection ? {...this._selection} : null;
+    }
+
+    get tool() {
+        return this._tool;
+    }
+
+    get hoverWindow() {
+        return this._hoverWindow ? {...this._hoverWindow} : null;
+    }
+
+    testMotion(x, y) {
+        this._onMotion({
+            get_coords: () => [x, y],
+            get_state: () => 0,
+            get_source: () => this._root,
+        });
+    }
+
+    testRelease() {
+        this._onRelease({
+            get_button: () => 1,
+            get_coords: () => [0, 0],
+            get_state: () => 0,
+            get_source: () => this._root,
+        });
+    }
+
+    testPress(x, y) {
+        this._onPress({
+            get_coords: () => [x, y],
+            get_button: () => 1,
+            get_state: () => 0,
+            get_source: () => this._root,
+        });
     }
 
     setSelection(selection) {
@@ -141,9 +205,15 @@ export class NativeOverlay {
             `scale=${this._scale} texture=${texture.get_width()}x${texture.get_height()} ` +
             `geometry=${width}x${height}`);
         const stream = Gio.MemoryOutputStream.new_resizable();
+        const cursorTexture = this._settings.get_boolean('capture-cursor') &&
+            this._cursorContent
+            ? this._cursorContent.get_texture()
+            : null;
+        const cursorX = this._cursorPoint ? this._cursorPoint.x * this._scale : 0;
+        const cursorY = this._cursorPoint ? this._cursorPoint.y * this._scale : 0;
         const pixbuf = await Shell.Screenshot.composite_to_stream(
             texture, 0, 0, width, height, this._scale,
-            null, 0, 0, 1, stream);
+            cursorTexture, cursorX, cursorY, this._cursorScale, stream);
         stream.close(null);
         log(`cosnip: pixbuf=${pixbuf.get_width()}x${pixbuf.get_height()}`);
         return pixbuf;
@@ -215,7 +285,7 @@ export class NativeOverlay {
         });
         this._tips.clutter_text.set_markup(
             '<b>Drag</b> select   <b>Shift</b> square   <b>Enter</b> copy\n' +
-            '<b>Ctrl+S</b> save   <b>P</b> pin   <b>Esc</b> cancel');
+            '<b>Ctrl+S</b> save   <b>P</b> pin   <b>Tab</b> window detect   <b>Esc</b> cancel');
         this._root.add_child(this._tips);
 
         this._root.connect('button-press-event', (_actor, event) => this._onPress(event));
@@ -228,6 +298,7 @@ export class NativeOverlay {
                 this._panelBox.visible = this._panelVisible ?? true;
         });
 
+        this._windowList = this._collectWindows();
         Main.layoutManager.screenshotUIGroup.add_child(this._root);
         this._panelBox = Main.layoutManager.panelBox;
         this._panelVisible = this._panelBox.visible;
@@ -244,8 +315,30 @@ export class NativeOverlay {
         const cr = area.get_context();
         const width = area.width;
         const height = area.height;
-        cr.setSourceRGBA(0, 0, 0, 0.45);
+        cr.setSourceRGBA(
+            this._maskColor[0] / 255, this._maskColor[1] / 255,
+            this._maskColor[2] / 255, this._maskColor[3] / 255);
         if (!this._selection) {
+            if (this._hoverWindow) {
+                const {x, y, w, h} = this._hoverWindow;
+                cr.rectangle(0, 0, width, Math.max(0, y));
+                cr.rectangle(0, y + h, width, Math.max(0, height - y - h));
+                cr.rectangle(0, y, Math.max(0, x), h);
+                cr.rectangle(x + w, y, Math.max(0, width - x - w), h);
+                cr.fill();
+                cr.setSourceRGBA(
+                    this._borderColor[0] / 255, this._borderColor[1] / 255,
+                    this._borderColor[2] / 255, this._borderColor[3] / 255);
+                cr.setLineWidth(this._borderWidth);
+                cr.rectangle(x, y, w, h);
+                cr.stroke();
+                cr.setSourceRGBA(1, 1, 1, 0.28);
+                cr.setLineWidth(1);
+                cr.rectangle(x + 2, y + 2, Math.max(0, w - 4), Math.max(0, h - 4));
+                cr.stroke();
+                this._paintMagnifier(cr, width, height);
+                return;
+            }
             cr.rectangle(0, 0, width, height);
             cr.fill();
             return;
@@ -257,17 +350,120 @@ export class NativeOverlay {
         cr.rectangle(x + w, y, Math.max(0, width - x - w), h);
         cr.fill();
 
-        cr.setSourceRGBA(...SELECTION_COLOR);
-        cr.setLineWidth(1.5);
+        cr.setSourceRGBA(
+            this._borderColor[0] / 255, this._borderColor[1] / 255,
+            this._borderColor[2] / 255, this._borderColor[3] / 255);
+        cr.setLineWidth(this._borderWidth);
         cr.rectangle(x, y, w, h);
         cr.stroke();
-        for (const [hx, hy] of handlePoints(this._selection)) {
-            cr.arc(hx, hy, 4.5, 0, Math.PI * 2);
-            cr.setSourceRGBA(1, 1, 1, 1);
-            cr.fillPreserve();
-            cr.setSourceRGBA(...SELECTION_COLOR);
-            cr.setLineWidth(1.2);
+        cr.setSourceRGBA(1, 1, 1, 0.28);
+        cr.setLineWidth(1);
+        cr.rectangle(x + 2, y + 2, Math.max(0, w - 4), Math.max(0, h - 4));
+        cr.stroke();
+        if (this._showAnchors) {
+            for (const [hx, hy] of handlePoints(this._selection)) {
+                cr.arc(hx, hy, 4.5, 0, Math.PI * 2);
+                cr.setSourceRGBA(1, 1, 1, 1);
+                cr.fillPreserve();
+                cr.setSourceRGBA(
+                    this._anchorColor[0] / 255, this._anchorColor[1] / 255,
+                    this._anchorColor[2] / 255, this._anchorColor[3] / 255);
+                cr.setLineWidth(1.2);
+                cr.stroke();
+            }
+        }
+        this._paintMagnifier(cr, width, height);
+        if (this._showCrossLines && this._pointerPos) {
+            cr.setSourceRGBA(
+                this._borderColor[0] / 255, this._borderColor[1] / 255,
+                this._borderColor[2] / 255, 0.55);
+            cr.setLineWidth(1);
+            cr.moveTo(0, this._pointerPos.y);
+            cr.lineTo(width, this._pointerPos.y);
+            cr.moveTo(this._pointerPos.x, 0);
+            cr.lineTo(this._pointerPos.x, height);
             cr.stroke();
+        }
+    }
+
+    _paintMagnifier(cr, width, height) {
+        if (!this._magnifier || !this._pointerPos || !this._sourcePixbuf)
+            return;
+        const size = Math.max(3, Math.min(21, this._magnifierSize | 1));
+        const radius = (size - 1) / 2;
+        const cell = Math.max(2, this._magnifierZoom);
+        const box = size * cell;
+        let x = this._pointerPos.x + 24;
+        if (x + box + 8 > width)
+            x = this._pointerPos.x - box - 24;
+        x = Math.max(8, Math.min(width - box - 8, x));
+        let y = this._pointerPos.y + 24;
+        if (y + box + 24 > height)
+            y = this._pointerPos.y - box - 24;
+        y = Math.max(8, Math.min(height - box - 24, y));
+
+        if (this._toolbar?.visible) {
+            const [tx, ty] = this._toolbar.get_transformed_position();
+            const [tw, th] = this._toolbar.get_transformed_size();
+            const overlapsToolbar = x < tx + tw && x + box > tx &&
+                y < ty + th + 22 && y + box + 22 > ty;
+            if (overlapsToolbar) {
+                y = this._pointerPos.y - box - 24;
+                y = Math.max(8, Math.min(height - box - 24, y));
+            }
+        }
+
+        cr.setSourceRGBA(0, 0, 0, 0.82);
+        cr.rectangle(x - 4, y - 4, box + 8, box + 8);
+        cr.fill();
+        for (let gy = 0; gy < size; gy++) {
+            for (let gx = 0; gx < size; gx++) {
+                const sx = Math.round(
+                    (this._pointerPos.x + gx - radius) * this._scale);
+                const sy = Math.round(
+                    (this._pointerPos.y + gy - radius) * this._scale);
+                const pixel = pixbufPixel(this._sourcePixbuf, sx, sy);
+                cr.setSourceRGBA(
+                    pixel[0] / 255, pixel[1] / 255, pixel[2] / 255, 1);
+                cr.rectangle(x + gx * cell, y + gy * cell, cell, cell);
+                cr.fill();
+            }
+        }
+        if (this._magnifierGrid) {
+            cr.setSourceRGBA(0, 0, 0, 0.28);
+            cr.setLineWidth(1);
+            for (let i = 0; i <= size; i++) {
+                cr.moveTo(x + i * cell, y);
+                cr.lineTo(x + i * cell, y + box);
+                cr.moveTo(x, y + i * cell);
+                cr.lineTo(x + box, y + i * cell);
+            }
+            cr.stroke();
+        }
+        cr.setSourceRGBA(1, 1, 1, 0.9);
+        cr.setLineWidth(1);
+        cr.rectangle(x - 1, y - 1, box + 2, box + 2);
+        cr.stroke();
+
+        if (this._magnifierCoords) {
+            const px = Math.round(this._pointerPos.x);
+            const py = Math.round(this._pointerPos.y);
+            const pixel = pixbufPixel(
+                this._sourcePixbuf,
+                Math.round(px * this._scale),
+                Math.round(py * this._scale));
+            const text = `${px}, ${py}  #${pixel[0].toString(16).padStart(2, '0')}` +
+                `${pixel[1].toString(16).padStart(2, '0')}` +
+                `${pixel[2].toString(16).padStart(2, '0')}`;
+            cr.setSourceRGBA(0, 0, 0, 0.82);
+            cr.rectangle(x - 4, y + box + 6, box + 8, 16);
+            cr.fill();
+            cr.setSourceRGBA(1, 1, 1, 0.92);
+            cr.selectFontFace('monospace', cairo.FontSlant.NORMAL,
+                cairo.FontWeight.NORMAL);
+            cr.setFontSize(10);
+            cr.moveTo(x, y + box + 17);
+            cr.showText(text);
         }
     }
 
@@ -343,6 +539,47 @@ export class NativeOverlay {
         this._toolbar.setTool(tool);
     }
 
+    _collectWindows() {
+        const active = global.workspace_manager.get_active_workspace();
+        const list = [];
+        for (const actor of global.get_window_actors()) {
+            const win = actor.meta_window;
+            if (!win)
+                continue;
+            try {
+                if (win.minimized || win.skip_taskbar)
+                    continue;
+                const type = win.get_window_type();
+                if (type !== Meta.WindowType.NORMAL &&
+                    type !== Meta.WindowType.DIALOG &&
+                    type !== Meta.WindowType.MODAL_DIALOG)
+                    continue;
+                if (!win.is_on_all_workspaces() && win.get_workspace() !== active)
+                    continue;
+                const rect = win.get_frame_rect();
+                if (rect.width < 2 || rect.height < 2)
+                    continue;
+                if (this._hide1x1 && rect.width <= 1 && rect.height <= 1)
+                    continue;
+                list.push({
+                    rect: {x: rect.x, y: rect.y, w: rect.width, h: rect.height},
+                    win,
+                });
+            } catch (_error) {
+                // Ignore windows that disappear during enumeration.
+            }
+        }
+        return list.reverse();
+    }
+
+    _windowAt(point) {
+        for (const window of this._windowList) {
+            if (contains(window.rect, point))
+                return window;
+        }
+        return null;
+    }
+
     _pointer(event) {
         const [x, y] = event.get_coords();
         return {x, y};
@@ -359,14 +596,41 @@ export class NativeOverlay {
         return false;
     }
 
+    _pointInChrome(point) {
+        for (const actor of [this._toolbar, this._sizeBadge, this._tips, this._textEntry?.entry]) {
+            if (!actor || !actor.visible)
+                continue;
+            const [x, y] = actor.get_transformed_position();
+            const [w, h] = actor.get_transformed_size();
+            if (point.x >= x && point.x < x + w && point.y >= y && point.y < y + h)
+                return true;
+        }
+        return false;
+    }
+
     _onPress(event) {
-        if (this._sourceIsChrome(event.get_source()))
+        const point = this._pointer(event);
+        const source = event.get_source();
+        // When the modal grab delivers the event to the overlay root instead
+        // of the button, dispatch the toolbar action by geometry. A real
+        // button target still handles its own click normally.
+        if (this._sourceIsChrome(source))
             return Clutter.EVENT_PROPAGATE;
+        if (this._pointInChrome(point)) {
+            if (this._toolbar.contains(source) === false)
+                this._toolbar.clickAt(point);
+            return Clutter.EVENT_STOP;
+        }
         if (this._textEntry) {
             this._commitText();
             return Clutter.EVENT_STOP;
         }
         const button = event.get_button();
+        if (button === 2) {
+            if (this._selection)
+                this._runAction(this._settings.get_enum('middle-click-action'));
+            return Clutter.EVENT_STOP;
+        }
         if (button !== 1) {
             if (this._draft) {
                 this._draft = null;
@@ -376,8 +640,25 @@ export class NativeOverlay {
             }
             return Clutter.EVENT_STOP;
         }
-        const point = this._pointer(event);
+        const now = GLib.get_monotonic_time() / 1000;
+        if (this._lastClick && this._selection &&
+            now - this._lastClick.time <= 350 &&
+            Math.hypot(point.x - this._lastClick.x, point.y - this._lastClick.y) <= 6 &&
+            contains(this._selection, point)) {
+            this._lastClick = null;
+            this._runAction(this._settings.get_enum('double-click-action'));
+            return Clutter.EVENT_STOP;
+        }
+        this._lastClick = {time: now, x: point.x, y: point.y};
         if (this._tool === Tool.SELECT) {
+            if (!this._selection && this._autoDetect && this._hoverWindow) {
+                this._drag = {
+                    mode: 'window',
+                    anchor: point,
+                    window: {...this._hoverWindow},
+                };
+                return Clutter.EVENT_STOP;
+            }
             if (this._selection) {
                 const handle = hitHandle(this._selection, point);
                 if (handle) {
@@ -416,6 +697,31 @@ export class NativeOverlay {
             this._createTextEntry(point);
             return Clutter.EVENT_STOP;
         }
+        if (this._tool === Tool.NUMBER) {
+            this._addAnnotation({
+                kind: Tool.NUMBER,
+                x: point.x,
+                y: point.y,
+                value: this._nextNumber++,
+                color: this._style.color,
+                width: this._style.width,
+            });
+            this._repaint();
+            return Clutter.EVENT_STOP;
+        }
+        if (this._tool === Tool.MAGNIFIER) {
+            this._addAnnotation({
+                kind: Tool.MAGNIFIER,
+                x: point.x,
+                y: point.y,
+                radius: 48,
+                zoom: 2,
+                color: this._style.color,
+                width: this._style.width,
+            });
+            this._repaint();
+            return Clutter.EVENT_STOP;
+        }
 
         this._draft = createAnnotation(this._tool, point, this._style);
         this._drag = {mode: 'annotation'};
@@ -424,9 +730,32 @@ export class NativeOverlay {
     }
 
     _onMotion(event) {
-        if (!this._drag)
-            return Clutter.EVENT_PROPAGATE;
         const point = this._pointer(event);
+        this._pointerPos = point;
+        if (this._magnifier)
+            this._repaint();
+        if (!this._drag) {
+            if (this._autoDetect && !this._selection) {
+                const window = this._windowAt(point);
+                const rect = window ? window.rect : null;
+                if (!sameRect(rect, this._hoverWindow)) {
+                    this._hoverWindow = rect;
+                    this._repaint();
+                }
+            }
+            return Clutter.EVENT_PROPAGATE;
+        }
+        if (this._drag.mode === 'window') {
+            if (Math.hypot(point.x - this._drag.anchor.x,
+                point.y - this._drag.anchor.y) <= 4)
+                return Clutter.EVENT_STOP;
+            const anchor = this._drag.anchor;
+            this._drag = {mode: 'new', anchor};
+            this._selection = rectFromPoints(anchor, point, false);
+            this._layoutChrome();
+            this._repaint();
+            return Clutter.EVENT_STOP;
+        }
         if (this._drag.mode === 'new') {
             const shift = Boolean(event.get_state() & Clutter.ModifierType.SHIFT_MASK);
             this._selection = rectFromPoints(this._drag.anchor, point, shift);
@@ -457,7 +786,16 @@ export class NativeOverlay {
         if (!this._drag)
             return Clutter.EVENT_PROPAGATE;
         const mode = this._drag.mode;
+        const windowRect = this._drag.window;
         this._drag = null;
+        if (mode === 'window' && windowRect) {
+            this._selection = {...windowRect};
+            this._hoverWindow = null;
+            this._rememberSelection();
+            this._layoutChrome();
+            this._repaint();
+            return Clutter.EVENT_STOP;
+        }
         if (mode === 'annotation' && this._draft) {
             if (annotationIsValid(this._draft))
                 this._addAnnotation(this._draft);
@@ -467,6 +805,8 @@ export class NativeOverlay {
             if (this._selection && (this._selection.w < 3 || this._selection.h < 3)) {
                 this._selection = null;
                 this._layoutChrome();
+            } else if (this._selection) {
+                this._rememberSelection();
             }
             this._repaint();
         }
@@ -474,7 +814,7 @@ export class NativeOverlay {
     }
 
     _onScroll(event) {
-        if (!this._selection)
+        if (!this._selection || this._disableScroll)
             return Clutter.EVENT_PROPAGATE;
         const [dx, dy] = event.get_scroll_delta();
         const delta = dy !== 0 ? dy : -dx;
@@ -493,12 +833,18 @@ export class NativeOverlay {
         const shift = Boolean(state & Clutter.ModifierType.SHIFT_MASK);
         if (this._textEntry)
             return Clutter.EVENT_PROPAGATE;
+        if (symbol === Clutter.KEY_Tab) {
+            this._autoDetect = !this._autoDetect;
+            this._hoverWindow = null;
+            this._repaint();
+            return Clutter.EVENT_STOP;
+        }
         if (symbol === Clutter.KEY_Escape) {
             this._escape();
             return Clutter.EVENT_STOP;
         }
         if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
-            this._defaultOutput();
+            this._runAction(this._settings.get_enum('enter-action'));
             return Clutter.EVENT_STOP;
         }
         if (ctrl && symbol === Clutter.KEY_c) {
@@ -521,6 +867,11 @@ export class NativeOverlay {
             this._selection = {x: 0, y: 0, w: global.stage.width, h: global.stage.height};
             this._layoutChrome();
             this._repaint();
+            return Clutter.EVENT_STOP;
+        }
+        if (!ctrl && symbol === Clutter.KEY_r && this._history.length > 0 &&
+            (shift || !this._selection)) {
+            this._reuseHistory();
             return Clutter.EVENT_STOP;
         }
         if (!ctrl) {
@@ -552,6 +903,39 @@ export class NativeOverlay {
             return Clutter.EVENT_STOP;
         }
         return Clutter.EVENT_PROPAGATE;
+    }
+
+    _rememberSelection() {
+        if (!this._selection)
+            return;
+        const rect = {
+            x: Math.round(this._selection.x),
+            y: Math.round(this._selection.y),
+            w: Math.round(this._selection.w),
+            h: Math.round(this._selection.h),
+        };
+        if (rect.w < 3 || rect.h < 3)
+            return;
+        const last = this._history[this._history.length - 1];
+        if (!last || !sameRect(last, rect))
+            this._history.push(rect);
+        while (this._history.length > this._historySize)
+            this._history.shift();
+        this._historyCursor = this._history.length;
+    }
+
+    _reuseHistory() {
+        if (this._history.length === 0)
+            return;
+        if (this._historyCursor <= 0 || this._historyCursor > this._history.length)
+            this._historyCursor = this._history.length;
+        this._historyCursor -= 1;
+        this._selection = {...this._history[this._historyCursor]};
+        this._hoverWindow = null;
+        this._tool = Tool.SELECT;
+        this._toolbar.syncShape(Tool.SELECT);
+        this._layoutChrome();
+        this._repaint();
     }
 
     _escape() {
@@ -693,13 +1077,16 @@ export class NativeOverlay {
         return surface;
     }
 
-    _defaultOutput() {
-        switch (this._settings.get_enum('default-output')) {
+    _runAction(action) {
+        switch (action) {
         case 1:
             this._save();
             break;
         case 2:
             this._pin();
+            break;
+        case 3:
+            this._close();
             break;
         default:
             this._copy();
@@ -776,6 +1163,12 @@ export class NativeOverlay {
         this._root = null;
         this._onClose?.();
     }
+}
+
+function sameRect(a, b) {
+    if (!a || !b)
+        return a === b;
+    return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
 function contains(rect, point) {
@@ -865,6 +1258,9 @@ function toolForKey(symbol) {
     case Clutter.KEY_a: return Tool.ARROW;
     case Clutter.KEY_b: return Tool.PENCIL;
     case Clutter.KEY_h: return Tool.MARKER;
+    case Clutter.KEY_l: return Tool.LINE;
+    case Clutter.KEY_n: return Tool.NUMBER;
+    case Clutter.KEY_g: return Tool.MAGNIFIER;
     case Clutter.KEY_m: return Tool.MOSAIC;
     case Clutter.KEY_t: return Tool.TEXT;
     case Clutter.KEY_e: return Tool.ERASER;

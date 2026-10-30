@@ -80,6 +80,36 @@ const INTERFACE_XML = `
       <arg type="b" direction="out" name="ok"/>
     </method>
     <method name="PinSelection"/>
+    <method name="Pointer">
+      <arg type="i" direction="out" name="x"/>
+      <arg type="i" direction="out" name="y"/>
+    </method>
+    <method name="Selection">
+      <arg type="b" direction="out" name="active"/>
+      <arg type="i" direction="out" name="x"/>
+      <arg type="i" direction="out" name="y"/>
+      <arg type="i" direction="out" name="width"/>
+      <arg type="i" direction="out" name="height"/>
+    </method>
+    <method name="Tool">
+      <arg type="s" direction="out" name="tool"/>
+    </method>
+    <method name="TestMotion">
+      <arg type="i" direction="in" name="x"/>
+      <arg type="i" direction="in" name="y"/>
+    </method>
+    <method name="HoverWindow">
+      <arg type="b" direction="out" name="active"/>
+      <arg type="i" direction="out" name="x"/>
+      <arg type="i" direction="out" name="y"/>
+      <arg type="i" direction="out" name="width"/>
+      <arg type="i" direction="out" name="height"/>
+    </method>
+    <method name="TestRelease"/>
+    <method name="TestPress">
+      <arg type="i" direction="in" name="x"/>
+      <arg type="i" direction="in" name="y"/>
+    </method>
     <method name="CaptureStage">
       <arg type="s" direction="in" name="path"/>
       <arg type="b" direction="out" name="ok"/>
@@ -103,7 +133,7 @@ class NativeService {
     }
 
     Ping() {
-        return 'cosnip-native/1';
+        return 'cosnip-native/2';
     }
 
     Count() {
@@ -146,6 +176,42 @@ class NativeService {
         this._extension.pinSelection();
     }
 
+    Pointer() {
+        return global.get_pointer();
+    }
+
+    Selection() {
+        const selection = this._extension.overlaySelection;
+        if (!selection)
+            return [false, 0, 0, 0, 0];
+        return [true, Math.round(selection.x), Math.round(selection.y),
+            Math.round(selection.w), Math.round(selection.h)];
+    }
+
+    Tool() {
+        return this._extension.overlayTool;
+    }
+
+    TestMotion(x, y) {
+        this._extension.testMotion(x, y);
+    }
+
+    HoverWindow() {
+        const window = this._extension.hoverWindow;
+        if (!window)
+            return [false, 0, 0, 0, 0];
+        return [true, Math.round(window.x), Math.round(window.y),
+            Math.round(window.w), Math.round(window.h)];
+    }
+
+    TestRelease() {
+        this._extension.testRelease();
+    }
+
+    TestPress(x, y) {
+        this._extension.testPress(x, y);
+    }
+
     CaptureStage(path) {
         return this._extension.captureStage(path);
     }
@@ -160,7 +226,7 @@ export default class CosnipExtension extends Extension {
         this._settings = this.getSettings();
         this._overlay = null;
 
-        this._pins = new PinManager(() => this._syncPanel());
+        this._pins = new PinManager(this._settings, () => this._syncPanel());
         this._overviewShowingId = Main.overview.connect(
             'showing', () => this._pins.setVisible(false));
         this._overviewHiddenId = Main.overview.connect(
@@ -251,6 +317,14 @@ export default class CosnipExtension extends Extension {
         return this._pins?.count ?? 0;
     }
 
+    get overlaySelection() {
+        return this._overlay?.selection ?? null;
+    }
+
+    get overlayTool() {
+        return this._overlay?.tool ?? 'closed';
+    }
+
     async startSnip() {
         if (this._overlay) {
             this._overlay.actor?.show();
@@ -258,12 +332,16 @@ export default class CosnipExtension extends Extension {
         }
         try {
             const screenshot = new Shell.Screenshot();
-            const [content, scale] = await screenshot.screenshot_stage_to_content();
+            const [content, scale, cursorContent, cursorPoint, cursorScale] =
+                await screenshot.screenshot_stage_to_content();
             if (!content)
                 throw new Error('empty stage content');
             this._overlay = new NativeOverlay({
                 content,
                 scale,
+                cursorContent,
+                cursorPoint,
+                cursorScale,
                 settings: this._settings,
                 onClose: () => {
                     this._overlay = null;
@@ -325,6 +403,22 @@ export default class CosnipExtension extends Extension {
 
     setSelection(x, y, width, height) {
         this._overlay?.setSelection({x, y, w: width, h: height});
+    }
+
+    testMotion(x, y) {
+        this._overlay?.testMotion(x, y);
+    }
+
+    get hoverWindow() {
+        return this._overlay?.hoverWindow ?? null;
+    }
+
+    testPress(x, y) {
+        this._overlay?.testPress(x, y);
+    }
+
+    testRelease() {
+        this._overlay?.testRelease();
     }
 
     pinSelection() {
