@@ -38,7 +38,9 @@ global pointer movement, and always-on-top pin actors.
 ./extensions/install.sh
 ```
 
-Log out and back in so GNOME Shell scans a newly copied extension, then verify:
+Log out and back in so GNOME Shell scans a newly copied extension. An update to
+an existing install also requires a re-login because the running Shell caches
+extension modules and schemas. Then verify:
 
 ```bash
 gnome-extensions info cosnip@cosnip

@@ -41,7 +41,9 @@ cd cosnip
 ./extensions/install.sh
 ```
 
-Log out and back in so GNOME Shell scans a newly copied extension, then verify:
+Log out and back in so GNOME Shell scans a newly copied extension. This is also
+required after updating an existing install; GNOME caches extension modules and
+GSettings schemas in the running Shell. Then verify:
 
 ```bash
 gnome-extensions info cosnip@cosnip
