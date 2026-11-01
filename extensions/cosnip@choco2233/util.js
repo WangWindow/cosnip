@@ -15,18 +15,82 @@ export function tempPath(suffix = '.png') {
   ]);
 }
 
-export function saveSurface(surface, path) {
+function opaquePixbuf(pixbuf) {
+  if (!pixbuf.get_has_alpha())
+    return pixbuf;
+  const width = pixbuf.get_width();
+  const height = pixbuf.get_height();
+  const source = pixbuf.get_pixels();
+  const stride = pixbuf.get_rowstride();
+  const channels = pixbuf.get_n_channels();
+  const outputStride = width * 3;
+  const data = new Uint8Array(outputStride * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const sourceOffset = y * stride + x * channels;
+      const outputOffset = y * outputStride + x * 3;
+      data[outputOffset] = source[sourceOffset];
+      data[outputOffset + 1] = source[sourceOffset + 1];
+      data[outputOffset + 2] = source[sourceOffset + 2];
+    }
+  }
+  return GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(data),
+    GdkPixbuf.Colorspace.RGB, false, 8, width, height, outputStride);
+}
+
+function saveOptions(dpi, format) {
+  const jpeg = format === 'jpeg' || format === 'jpg';
+  const keys = [jpeg ? 'quality' : 'compression'];
+  const values = [jpeg ? '90' : '3'];
+  if (dpi > 0) {
+    keys.push('x-dpi', 'y-dpi');
+    values.push(`${Math.round(dpi)}`, `${Math.round(dpi)}`);
+  }
+  return { type: jpeg ? 'jpeg' : 'png', keys, values };
+}
+
+export async function saveSurface(surface, path, dpi = 0, format = 'png') {
   const file = Gio.File.new_for_path(path);
   const parent = file.get_parent();
   if (parent && !parent.query_exists(null))
     parent.make_directory_with_parents(null);
-  surface.writeToPNG(path);
+  const pixbuf = opaquePixbuf(surfaceToPixbuf(surface));
+  const { type, keys, values } = saveOptions(dpi, format);
+  const stream = file.replace(null, false, Gio.FileCreateFlags.NONE, null);
+  try {
+    await new Promise((resolve, reject) => {
+      pixbuf.save_to_streamv_async(stream, type, keys, values, null,
+        (_source, result) => {
+          try {
+            GdkPixbuf.Pixbuf.save_to_stream_finish(result);
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        });
+    });
+    stream.close(null);
+  } catch (error) {
+    stream.close(null);
+    GLib.unlink(path);
+    throw error;
+  }
 }
 
-export function surfaceToPngBytes(surface) {
+function saveSurfaceSync(surface, path, dpi = 0, format = 'png') {
+  const file = Gio.File.new_for_path(path);
+  const parent = file.get_parent();
+  if (parent && !parent.query_exists(null))
+    parent.make_directory_with_parents(null);
+  const pixbuf = opaquePixbuf(surfaceToPixbuf(surface));
+  const { type, keys, values } = saveOptions(dpi, format);
+  pixbuf.savev(path, type, keys, values);
+}
+
+export function surfaceToPngBytes(surface, dpi = 0) {
   const path = tempPath();
   try {
-    surface.writeToPNG(path);
+    saveSurfaceSync(surface, path, dpi);
     const [bytes] = Gio.File.new_for_path(path).load_bytes(null);
     return bytes;
   } finally {
@@ -35,17 +99,12 @@ export function surfaceToPngBytes(surface) {
 }
 
 export function surfaceToPixbuf(surface) {
-  const path = tempPath();
-  try {
-    surface.writeToPNG(path);
-    return GdkPixbuf.Pixbuf.new_from_file(path);
-  } finally {
-    GLib.unlink(path);
-  }
+  return Gdk.pixbuf_get_from_surface(
+    surface, 0, 0, surface.getWidth(), surface.getHeight());
 }
 
-export function copySurfaceToClipboard(surface) {
-  const bytes = surfaceToPngBytes(surface);
+export function copySurfaceToClipboard(surface, dpi = 0) {
+  const bytes = surfaceToPngBytes(surface, dpi);
   St.Clipboard.get_default().set_content(
     St.ClipboardType.CLIPBOARD, 'image/png', bytes);
 }
@@ -76,11 +135,13 @@ export function surfaceToImageContent(surface, width, height) {
   return pixbufToImageContent(surfaceToPixbuf(surface), width, height);
 }
 
-export function paintPixbuf(cr, pixbuf, x, y, scale = 1) {
+export function paintPixbuf(cr, pixbuf, x, y, scale = 1, filter = null) {
   cr.save();
   cr.translate(x, y);
   cr.scale(scale, scale);
   Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0);
+  if (filter !== null)
+    cr.getSource().setFilter(filter);
   cr.paint();
   cr.restore();
 }

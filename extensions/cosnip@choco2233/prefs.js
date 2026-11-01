@@ -133,6 +133,27 @@ export default class CosnipPreferences extends ExtensionPreferences {
     filename.connect('notify::text', () =>
       settings.set_string('filename', filename.text));
     save.add(filename);
+
+    const format = new Adw.ComboRow({
+      title: 'Image format',
+      subtitle: 'PNG is lossless; JPEG produces much smaller files',
+      model: Gtk.StringList.new(['PNG', 'JPEG']),
+    });
+    format.selected = Math.max(0, settings.get_enum('save-format'));
+    format.connect('notify::selected', () =>
+      settings.set_enum('save-format', format.selected));
+    settings.connect('changed::save-format', () => {
+      format.selected = Math.max(0, settings.get_enum('save-format'));
+    });
+    save.add(format);
+    const saveOnCopy = new Adw.SwitchRow({
+      title: 'Save image when copying',
+      subtitle: 'Write the image to disk as well as the clipboard',
+    });
+    settings.bind('save-on-copy', saveOnCopy, 'active',
+      Gio.SettingsBindFlags.DEFAULT);
+    save.add(saveOnCopy);
+
     return page;
   }
 

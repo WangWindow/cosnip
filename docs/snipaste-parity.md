@@ -10,15 +10,15 @@ of scope for the native GNOME extension.
 | Area | Native extension |
 |---|---|
 | Capture | Native `Shell.Screenshot` stage capture; no portal/PipeWire |
-| Selection | Drag, move, eight handles, size badge, Ctrl+A |
+| Selection | Drag, move, eight handles, size badge, Ctrl+A selects the current monitor |
 | Window detection | Hover highlight and click-to-select; Tab toggles |
 | Display | Fixed two-tone selection frame, handles, dim mask, tips, magnifier with grid and coordinates; optional cursor capture |
-| Snip behavior | Window auto-detection; Enter default output; double-click copy; middle-click pin; wheel changes tool width |
-| Tools | Rectangle, line, arrow, pencil, highlighter, mosaic, blur, text, eraser, select; toolbar click only |
-| Eraser | Freehand annotation-pixel erase, original screenshot preserved |
-| Mosaic/blur | Freehand brush strokes, shared preview/export mask |
+| Snip behavior | Window auto-detection; Enter default output; double-click copy; middle-click pin |
+| Tools | Rectangle, line, arrow, pencil, highlighter, mosaic, text, eraser, select; toolbar click only |
+| Eraser | Fixed-width pixel erase; original screenshot preserved |
+| Mosaic | Freehand brush strokes, shared preview/export mask |
 | Undo/redo | Annotation add/erase history |
-| Output | Copy PNG, save PNG, native pin, default output, directory, filename |
+| Output | Copy PNG, save PNG/JPEG, native pin, default output, directory, filename, monitor-adaptive resolution and DPI |
 | Pins | Image-sized Shell actors, two-tone border texture, configurable opacity, drag, wheel zoom, right-click close |
 | Settings | GSettings + Adwaita preferences; one button-recorded global shortcut per action; keyboard tool bindings removed |
 | Automation | `org.cosnip.Native` D-Bus interface |

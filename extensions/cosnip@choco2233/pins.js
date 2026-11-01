@@ -16,6 +16,7 @@ export class PinManager {
   constructor(settings) {
     this._settings = settings;
     this._pins = new Map();
+    this._lastWheelEvent = null;
     this._nextId = 1;
     this._stageScrollId = global.stage.connect(
       'captured-event', (_actor, event) => {
@@ -63,6 +64,8 @@ export class PinManager {
       height,
       reactive: false,
     });
+    image.set_content_scaling_filters(
+      Clutter.ScalingFilter.NEAREST, Clutter.ScalingFilter.NEAREST);
     actor.add_child(image);
     const border = new St.DrawingArea({
       width,
@@ -151,7 +154,7 @@ export class PinManager {
     if (this._pins.size === 0 ||
         Main.actionMode !== Shell.ActionMode.NORMAL)
       return Clutter.EVENT_PROPAGATE;
-    const [x, y] = global.get_pointer();
+    const [x, y] = event.get_coords();
     const pin = this._pinAt(x, y);
     if (!pin || !this._zoomFromEvent(pin, event))
       return Clutter.EVENT_PROPAGATE;
@@ -161,7 +164,7 @@ export class PinManager {
   _pinAt(x, y) {
     for (const pin of [...this._pins.values()].reverse()) {
       const { actor } = pin;
-      if (x >= actor.x && x < actor.x + actor.width &&
+      if (actor.visible && x >= actor.x && x < actor.x + actor.width &&
         y >= actor.y && y < actor.y + actor.height)
         return pin;
     }
@@ -175,7 +178,7 @@ export class PinManager {
       const [dx, dy] = event.get_scroll_delta();
       const raw = dy !== 0 ? dy : -dx;
       const magnitude = Math.max(0.25, Math.min(1.5, Math.abs(raw)));
-      delta = raw === 0 ? 0 : Math.sign(raw) * magnitude;
+      delta = raw === 0 ? 0 : -Math.sign(raw) * magnitude;
     } else if (direction === Clutter.ScrollDirection.UP) {
       delta = 1;
     } else if (direction === Clutter.ScrollDirection.DOWN) {
@@ -183,11 +186,28 @@ export class PinManager {
     }
     if (delta === 0)
       return false;
-    this._zoomPin(pin, Math.max(-2, Math.min(2, delta)));
+    if (event.get_scroll_source() === Clutter.ScrollSource.WHEEL) {
+      // Mutter can emit a smooth event and a discrete event for one wheel step.
+      const previous = this._lastWheelEvent;
+      const current = {
+        pin,
+        time: event.get_time(),
+        smooth: direction === Clutter.ScrollDirection.SMOOTH,
+        sign: Math.sign(delta),
+      };
+      if (previous && previous.pin === pin && previous.time === current.time &&
+          previous.smooth !== current.smooth && previous.sign === current.sign) {
+        this._lastWheelEvent = null;
+        return true;
+      }
+      this._lastWheelEvent = current;
+    }
+    const [x, y] = event.get_coords();
+    this._zoomPin(pin, Math.max(-2, Math.min(2, delta)), x, y);
     return true;
   }
 
-  _zoomPin(pin, delta) {
+  _zoomPin(pin, delta, pointerX, pointerY) {
     const { actor, image, border, pixelWidth, pixelHeight } = pin;
     const ratio = pixelWidth / pixelHeight;
     const nextWidth = Math.min(
@@ -195,6 +215,9 @@ export class PinManager {
       Math.max(PIN_MIN_WIDTH,
         actor.width * Math.exp(delta * PIN_ZOOM_STEP)));
     const nextHeight = nextWidth / ratio;
+    const x = pointerX - (pointerX - actor.x) * nextWidth / actor.width;
+    const y = pointerY - (pointerY - actor.y) * nextHeight / actor.height;
+    actor.set_position(x, y);
     actor.set_size(nextWidth, nextHeight);
     image.set_size(nextWidth, nextHeight);
     border.set_size(nextWidth, nextHeight);
@@ -205,6 +228,8 @@ export class PinManager {
     const pin = this._pins.get(id);
     if (!pin)
       return;
+    if (this._lastWheelEvent?.pin === pin)
+      this._lastWheelEvent = null;
     this._pins.delete(id);
     Main.layoutManager.removeChrome(pin.actor);
     pin.actor.destroy();

@@ -25,7 +25,9 @@ portal screenshot permission, PipeWire, X11, or XWayland.
 - Mosaic/blur/eraser use the same freehand stroke mask in preview and output.
 - Text uses `St.Entry` while editing and Pango/Cairo for export.
 - Copy/save/pin composite the screenshot pixbuf and the same annotation renderer
-  into a Cairo surface.
+  into a Cairo surface at the selected monitor's native scale. PNG and JPEG saves carry matching DPI metadata (96 × monitor scale).
+- Text editing raises the compositor input panel above the screenshot overlay so
+  IME candidate windows remain visible.
 
 ## Pins
 

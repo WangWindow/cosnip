@@ -5,6 +5,10 @@
     <value nick="save" value="1"/>
     <value nick="pin" value="2"/>
   </enum>
+  <enum id="org.gnome.shell.extensions.cosnip.save-format">
+    <value nick="png" value="0"/>
+    <value nick="jpeg" value="1"/>
+  </enum>
   <schema id="org.gnome.shell.extensions.cosnip"
           path="/org/gnome/shell/extensions/cosnip/">
     <key name="snip-shortcut" type="as">
@@ -26,6 +30,14 @@
     <key name="filename" type="s">
       <default>'Cosnip_%Y-%m-%d_%H-%M-%S.png'</default>
       <summary>File name pattern</summary>
+    </key>
+    <key name="save-format" enum="org.gnome.shell.extensions.cosnip.save-format">
+      <default>'png'</default>
+      <summary>Image format</summary>
+    </key>
+    <key name="save-on-copy" type="b">
+      <default>false</default>
+      <summary>Also save the image when copying</summary>
     </key>
     <key name="show-tips" type="b">
       <default>true</default>

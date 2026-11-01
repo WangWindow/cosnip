@@ -2,7 +2,7 @@
   "uuid": "cosnip@choco2233",
   "name": "Cosnip",
   "description": "Native GNOME screenshot, annotation, and pin tool. Captures and renders inside the Shell, so overlays and pins stay sharp on scaled displays.",
-  "shell-version": ["48", "49", "50", "51"],
+  "shell-version": ["50", "51"],
   "settings-schema": "org.gnome.shell.extensions.cosnip",
-  "version": 2
+  "version": 3
 }

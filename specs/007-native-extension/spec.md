@@ -7,7 +7,7 @@ that captures, annotates, copies, saves, and pins natively.
 
 ## Requirements
 
-- GNOME 48–51, Wayland
+- GNOME Shell 50+, Wayland
 - No XWayland overlay or pins
 - No PipeWire or portal screenshot dependency
 - Native stage capture through `Shell.Screenshot`
@@ -16,6 +16,11 @@ that captures, annotates, copies, saves, and pins natively.
 - GSettings configuration and an extension preferences window
 - D-Bus automation interface
 - Legacy standalone app remains available at tag `legacy-software-v0.1.0`
+- Use original SVGs from a consistent open-source icon library and retain its license.
+- Keep the frozen selection pixel-aligned and display its physical output size.
+- Cover the Shell panel with the frozen image without exposing an intermediate frame.
+- Keep annotation previews responsive as existing annotations and strokes grow.
+- Zoom pins around the pointer using both mouse wheels and continuous scrolling.
 
 ## Acceptance
 
@@ -26,6 +31,10 @@ that captures, annotates, copies, saves, and pins natively.
 - Pins are image-sized Shell actors with drag, zoom, and right-click close.
 - Preferences open with `gnome-extensions prefs cosnip@choco2233`.
 - No XWayland window is created for the overlay or pins.
+- On a single scaled monitor, selected preview and exported pixels match the
+  captured stage; magnifier samples adjacent physical pixels.
+- Annotation previews, committed annotations, and exported results agree.
+- Pin scrolling works on the normal desktop and ignores hidden pins.
 
 ## Non-goals
 

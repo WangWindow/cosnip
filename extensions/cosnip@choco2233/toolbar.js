@@ -17,26 +17,29 @@ export const PALETTE = [
   [255, 255, 255, 255],
   [0, 0, 0, 255],
 ];
-export const WIDTHS = [1, 2, 3, 4, 6, 8];
 
 const TOOL_ICONS = {
-  shapes: 'rectangle-symbolic.svg',
-  line: 'line-symbolic.svg',
-  arrow: 'arrow-symbolic.svg',
-  marker: 'marker-symbolic.svg',
-  mosaic: 'mosaic-symbolic.svg',
-  text: 'text-symbolic.svg',
-  eraser: 'eraser-symbolic.svg',
+  shapes: 'square.svg',
+  line: 'slash.svg',
+  arrow: 'arrow-up-right.svg',
+  pencil: 'pencil.svg',
+  marker: 'highlighter.svg',
+  mosaic: 'grid-3x3.svg',
+  text: 'type.svg',
+  eraser: 'eraser.svg',
+  cursor: 'mouse-pointer-2.svg',
+  cancel: 'x.svg',
+  pin: 'pin.svg',
+  save: 'save.svg',
+  copy: 'copy.svg',
 };
 
-const NATIVE_ICONS = {
-  pencil: 'document-edit-symbolic',
-  cancel: 'window-close-symbolic',
-  pin: 'view-pin-symbolic',
-  save: 'document-save-symbolic',
-  copy: 'edit-copy-symbolic',
-  cursor: 'input-mouse-symbolic',
-};
+function containsPoint(actor, point) {
+  const [x, y] = actor.get_transformed_position();
+  const [w, h] = actor.get_transformed_size();
+  return point.x >= x && point.x < x + w &&
+    point.y >= y && point.y < y + h;
+}
 
 export const Toolbar = GObject.registerClass({
   GTypeName: 'CosnipToolbar',
@@ -52,45 +55,35 @@ export const Toolbar = GObject.registerClass({
     this._callbacks = callbacks;
     this._tool = Tool.SELECT;
     this._shapeTool = Tool.RECT;
-    this._mosaicTool = Tool.MOSAIC;
     this._buttons = new Map();
     this._colorIndex = 0;
-    this._widthIndex = 1;
     this._hoverButton = null;
     this._cursorVisible = false;
     this._cursorButton = null;
 
-    this._addTool('shapes', 'shapes', () => {
-      this._shapeTool = Tool.RECT;
-      this._callbacks.onTool(this._shapeTool);
-    }, 'Rectangle');
-    this._addTool('line', 'line', () => this._callbacks.onTool(Tool.LINE),
-      'Line');
-    this._addTool('arrow', 'arrow', () => this._callbacks.onTool(Tool.ARROW),
+    this._addTool('shapes', 'shapes',
+      () => this._toggleTool(Tool.RECT), 'Rectangle');
+    this._addTool('line', 'line', () => this._toggleTool(Tool.LINE), 'Line');
+    this._addTool('arrow', 'arrow', () => this._toggleTool(Tool.ARROW),
       'Arrow');
-    this._addTool('pencil', 'pencil',
-      () => this._callbacks.onTool(Tool.PENCIL), 'Pencil');
-    this._addTool('marker', 'marker',
-      () => this._callbacks.onTool(Tool.MARKER), 'Highlighter');
-    this._addTool('mosaic', 'mosaic', () => {
-      this._mosaicTool = this._mosaicTool === Tool.MOSAIC
-        ? Tool.BLUR : Tool.MOSAIC;
-      this._callbacks.onTool(this._mosaicTool);
-    }, 'Mosaic / Blur');
-    this._addTool('text', 'text', () => this._callbacks.onTool(Tool.TEXT),
-      'Text');
-    this._addTool('eraser', 'eraser',
-      () => this._callbacks.onTool(Tool.ERASER), 'Eraser');
-    this._colorButton = new ColorButton(PALETTE[this._colorIndex],
-      () => this._callbacks.onColorPicker?.(this._colorButton));
+    this._addTool('pencil', 'pencil', () => this._toggleTool(Tool.PENCIL),
+      'Pencil');
+    this._addTool('marker', 'marker', () => this._toggleTool(Tool.MARKER),
+      'Highlighter');
+    this._addTool('mosaic', 'mosaic', () => this._toggleTool(Tool.MOSAIC),
+      'Mosaic');
+    this._addTool('text', 'text', () => this._toggleTool(Tool.TEXT), 'Text');
+    this._addTool('eraser', 'eraser', () => this._toggleTool(Tool.ERASER),
+      'Eraser');
+    this._colorButton = new ColorButton(PALETTE[0], () => {
+      this._colorIndex = (this._colorIndex + 1) % PALETTE.length;
+      const color = PALETTE[this._colorIndex];
+      this._colorButton.setColor(color);
+      this._callbacks.onColor?.(color);
+    });
     this._colorButton.reactive = false;
     this._colorButton._tooltip = 'Color';
     this.add_child(this._colorButton);
-    this._widthButton = new WidthButton(WIDTHS[this._widthIndex],
-      () => this._callbacks.onWidthPicker?.(this._widthButton));
-    this._widthButton.reactive = false;
-    this._widthButton._tooltip = 'Line width';
-    this.add_child(this._widthButton);
 
     this._separator();
     this._cursorButton = this._addTool('cursor', 'cursor', () => {
@@ -103,6 +96,11 @@ export const Toolbar = GObject.registerClass({
     this._addTool('pin', 'pin', () => this._callbacks.onPin(), 'Pin');
     this._addTool('save', 'save', () => this._callbacks.onSave(), 'Save');
     this._addTool('copy', 'copy', () => this._callbacks.onCopy(), 'Copy');
+  }
+
+  _toggleTool(tool) {
+    const next = this._tool === tool ? Tool.SELECT : tool;
+    this._callbacks.onTool(next);
   }
 
   _addTool(name, icon, handler, tooltip = name) {
@@ -131,7 +129,7 @@ export const Toolbar = GObject.registerClass({
     this.setActive('arrow', tool === Tool.ARROW);
     this.setActive('pencil', tool === Tool.PENCIL);
     this.setActive('marker', tool === Tool.MARKER);
-    this.setActive('mosaic', tool === Tool.MOSAIC || tool === Tool.BLUR);
+    this.setActive('mosaic', tool === Tool.MOSAIC);
     this.setActive('text', tool === Tool.TEXT);
     this.setActive('eraser', tool === Tool.ERASER);
   }
@@ -153,16 +151,21 @@ export const Toolbar = GObject.registerClass({
     this._cursorButton?.setActive(visible);
   }
 
+  setSaving(saving) {
+    const button = this._buttons.get('save');
+    if (!button)
+      return;
+    button.setEnabled(!saving);
+    button._tooltip = saving ? 'Saving…' : 'Save';
+  }
+
   updateHover(point) {
     let target = null;
-    if (this.visible) {
+    if (this.visible && containsPoint(this, point)) {
       for (const child of this.get_children()) {
         if (!(child instanceof St.Button) || !child.visible)
           continue;
-        const [x, y] = child.get_transformed_position();
-        const [w, h] = child.get_transformed_size();
-        if (point.x >= x && point.x < x + w &&
-          point.y >= y && point.y < y + h) {
+        if (containsPoint(child, point)) {
           target = child;
           break;
         }
@@ -185,15 +188,12 @@ export const Toolbar = GObject.registerClass({
   }
 
   buttonAt(point) {
-    if (!this.visible)
+    if (!this.visible || !containsPoint(this, point))
       return null;
     for (const child of this.get_children()) {
       if (!(child instanceof St.Button) || !child.visible)
         continue;
-      const [x, y] = child.get_transformed_position();
-      const [w, h] = child.get_transformed_size();
-      if (point.x >= x && point.x < x + w &&
-        point.y >= y && point.y < y + h)
+      if (containsPoint(child, point))
         return child;
     }
     return null;
@@ -207,19 +207,12 @@ export const Toolbar = GObject.registerClass({
     return true;
   }
 
-  setStyle(color, width) {
-    const colorIndex = PALETTE.findIndex(entry =>
-      entry[0] === color[0] && entry[1] === color[1] &&
-      entry[2] === color[2] && entry[3] === color[3]);
-    if (colorIndex >= 0) {
-      this._colorIndex = colorIndex;
-      this._colorButton?.setColor(color);
-    }
-    const widthIndex = WIDTHS.indexOf(width);
-    if (widthIndex >= 0) {
-      this._widthIndex = widthIndex;
-      this._widthButton?.setWidth(width);
-    }
+  setStyle(color) {
+    this._colorButton?.setColor(color);
+  }
+
+  get styleDisplay() {
+    return { color: [...this._colorButton._color] };
   }
 });
 
@@ -257,43 +250,9 @@ const ColorButton = GObject.registerClass({
   }
 
   setColor(color) {
-    this._color = color;
-    this._area.queue_repaint();
-  }
-});
-
-const WidthButton = GObject.registerClass({
-  GTypeName: 'CosnipWidthButton',
-}, class WidthButton extends St.Button {
-  _init(width, handler) {
-    super._init({
-      style_class: 'cosnip-tool-button',
-      reactive: true,
-      track_hover: true,
-      can_focus: false,
-    });
-    this._width = width;
-    this._area = new St.DrawingArea({
-      width: 20,
-      height: 20,
-      y_align: Clutter.ActorAlign.CENTER,
-      x_align: Clutter.ActorAlign.CENTER,
-    });
-    this._area.connect('repaint', area => {
-      const cr = area.get_context();
-      cr.setSourceRGBA(0.18, 0.18, 0.18, 1);
-      cr.setLineWidth(Math.max(1, this._width * 0.8));
-      cr.moveTo(4, 10);
-      cr.lineTo(20, 10);
-      cr.stroke();
-    });
-    this.set_child(this._area);
-    this.connect('clicked', handler);
-    this.accessible_name = 'Line width';
-  }
-
-  setWidth(width) {
-    this._width = width;
+    if (this._color.every((channel, index) => channel === color[index]))
+      return;
+    this._color = [...color];
     this._area.queue_repaint();
   }
 });
@@ -312,7 +271,6 @@ const ToolButton = GObject.registerClass({
     this.accessible_name = icon;
     this._active = false;
     this._enabled = true;
-    const nativeIcon = NATIVE_ICONS[icon] ?? null;
     const fileIcon = TOOL_ICONS[icon] ?? null;
     const iconProps = {
       icon_size: 16,
@@ -323,7 +281,7 @@ const ToolButton = GObject.registerClass({
     if (fileIcon)
       iconProps.gicon = Gio.icon_new_for_string(`${ICON_BASE}/icons/${fileIcon}`);
     else
-      iconProps.icon_name = nativeIcon ?? 'image-missing-symbolic';
+      iconProps.icon_name = 'image-missing-symbolic';
     this._area = new St.Icon(iconProps);
     this.set_child(this._area);
     this.connect('clicked', () => {

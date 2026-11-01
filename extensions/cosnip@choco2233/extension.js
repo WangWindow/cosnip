@@ -88,6 +88,9 @@ const INTERFACE_XML = `
       <arg type="i" direction="in" name="y"/>
       <arg type="u" direction="in" name="button"/>
     </method>
+    <method name="TestType">
+      <arg type="s" direction="in" name="text"/>
+    </method>
     <method name="TestScroll">
       <arg type="i" direction="in" name="x"/>
       <arg type="i" direction="in" name="y"/>
@@ -156,7 +159,7 @@ class NativeService {
   }
 
   Ping() {
-    return 'cosnip-native/4';
+    return 'cosnip-native/8';
   }
 
   Count() {
@@ -191,9 +194,8 @@ class NativeService {
     this._extension.addText(text, x, y);
   }
 
-  SaveSelection(path) {
-    this._extension.saveSelection(path);
-    return true;
+  async SaveSelection(path) {
+    return await this._extension.saveSelection(path);
   }
 
   PinSelection() {
@@ -208,8 +210,12 @@ class NativeService {
     this._extension.warpClick(x, y, button);
   }
 
+  async TestType(text) {
+    await this._extension.testType(text);
+  }
+
   async TestScroll(x, y, step) {
-    this._extension.testScroll(x, y, step);
+    await this._extension.testScroll(x, y, step);
     await new Promise(resolve => {
       GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
         resolve();
@@ -377,12 +383,38 @@ export default class CosnipExtension extends Extension {
     try {
       const [seat, device] = this._virtualPointerDevice();
       seat.warp_pointer(x, y);
-      const time = Clutter.get_current_event_time() || 0;
+      const time = GLib.get_monotonic_time();
       device.notify_absolute_motion(time, x, y);
       device.notify_button(time, button, Clutter.ButtonState.PRESSED);
       device.notify_button(time, button, Clutter.ButtonState.RELEASED);
     } catch (error) {
       logError(error, 'cosnip: warp click failed');
+    }
+  }
+
+  async testType(text) {
+    try {
+      const seat = global.stage.context.get_backend().get_default_seat();
+      if (!this._virtualKeyboard) {
+        this._virtualKeyboard = seat.create_virtual_device(
+          Clutter.InputDeviceType.KEYBOARD_DEVICE);
+      }
+      const device = this._virtualKeyboard;
+      for (const character of text) {
+        const keyval = character === '\n'
+          ? Clutter.KEY_Return : character.codePointAt(0);
+        let time = Clutter.get_current_event_time() || 0;
+        device.notify_keyval(time, keyval, Clutter.KeyState.PRESSED);
+        time = Clutter.get_current_event_time() || 0;
+        device.notify_keyval(time, keyval, Clutter.KeyState.RELEASED);
+        await new Promise(resolve => GLib.timeout_add(
+          GLib.PRIORITY_DEFAULT, 40, () => {
+            resolve();
+            return GLib.SOURCE_REMOVE;
+          }));
+      }
+    } catch (error) {
+      logError(error, 'cosnip: test type failed');
     }
   }
 
@@ -418,16 +450,53 @@ export default class CosnipExtension extends Extension {
     }
   }
 
-  testScroll(x, y, step) {
+  async testScroll(x, y, step) {
     try {
       const [seat, device] = this._virtualPointerDevice();
       seat.warp_pointer(x, y);
-      const time = Clutter.get_current_event_time() || 0;
-      device.notify_absolute_motion(time, x, y);
-      device.notify_scroll_continuous(time, 0, step, 0, 1);
+      device.notify_absolute_motion(GLib.get_monotonic_time(), x, y);
+      await new Promise(resolve => GLib.timeout_add(
+        GLib.PRIORITY_DEFAULT, 80, () => {
+          resolve();
+          return GLib.SOURCE_REMOVE;
+        }));
+      device.notify_scroll_continuous(GLib.get_monotonic_time(), 0, step,
+        Clutter.ScrollSource.FINGER, Clutter.ScrollFinishFlags.NONE);
     } catch (error) {
       logError(error, 'cosnip: test scroll failed');
     }
+  }
+
+  _captureNativeMonitor(geometry, scale) {
+    const screenshot = new Shell.Screenshot();
+    const stream = Gio.MemoryOutputStream.new_resizable();
+    const bytes = new Promise((resolve) => {
+      screenshot.screenshot_area(geometry.x, geometry.y,
+        geometry.width, geometry.height, stream, (_shot, result) => {
+          try {
+            screenshot.screenshot_area_finish(result);
+            resolve(stream.steal_as_bytes());
+          } catch (_error) {
+            resolve(null);
+          }
+        });
+    });
+    const pixbuf = bytes.then(value => {
+      if (!value)
+        return null;
+      return new Promise((resolve) => {
+        const input = Gio.MemoryInputStream.new_from_bytes(value);
+        GdkPixbuf.Pixbuf.new_from_stream_async(input, null,
+          (_source, result) => {
+            try {
+              resolve(GdkPixbuf.Pixbuf.new_from_stream_finish(result));
+            } catch (_error) {
+              resolve(null);
+            }
+          });
+      });
+    });
+    return { geometry, scale, pixbuf };
   }
 
   async startSnip() {
@@ -436,13 +505,29 @@ export default class CosnipExtension extends Extension {
       return;
     }
     try {
+      const stageScale = Math.max(...Array.from(
+        { length: global.display.get_n_monitors() },
+        (_value, index) => global.display.get_monitor_scale(index) || 1));
+      const nativeMonitors = [];
+      for (let index = 0; index < global.display.get_n_monitors(); index++) {
+        const monitorScale = global.display.get_monitor_scale(index) || 1;
+        if (monitorScale + 0.001 >= stageScale)
+          continue;
+        nativeMonitors.push(this._captureNativeMonitor(
+          global.display.get_monitor_geometry(index), monitorScale));
+      }
       const screenshot = new Shell.Screenshot();
-      const [content, scale] = await screenshot.screenshot_stage_to_content();
+      const [content, scale, cursorContent, cursorPoint, cursorScale] =
+        await screenshot.screenshot_stage_to_content();
       if (!content)
         throw new Error('empty stage content');
       this._overlay = new NativeOverlay({
         content,
         scale,
+        cursorContent,
+        cursorPoint,
+        cursorScale,
+        nativeMonitors,
         settings: this._settings,
         onClose: () => {
           this._overlay = null;

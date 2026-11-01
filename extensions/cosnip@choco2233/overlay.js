@@ -2,20 +2,23 @@ import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import Pango from 'gi://Pango';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import cairo from 'cairo';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 
 import {
   Tool,
   annotationIsValid,
   createAnnotation,
+  draftBounds,
   drawAnnotations,
   updateAnnotation,
 } from './annotations.js';
-import { PALETTE, WIDTHS, Toolbar } from './toolbar.js';
+import { Toolbar } from './toolbar.js';
 import {
   copySurfaceToClipboard,
   defaultSaveDir,
@@ -41,6 +44,7 @@ export class NativeOverlay {
   constructor(options) {
     this._content = options.content;
     this._scale = options.scale || 1;
+    this._nativeMonitors = options.nativeMonitors ?? [];
     this._cursorContent = options.cursorContent ?? null;
     this._cursorPoint = options.cursorPoint ?? null;
     this._cursorScale = options.cursorScale ?? 1;
@@ -66,6 +70,7 @@ export class NativeOverlay {
     this._drag = null;
     this._textEntry = null;
     this._closed = false;
+    this._saving = false;
     this._autoDetect = this._settings.get_boolean('auto-detect-windows');
     this._borderWidth = BORDER_WIDTH;
     this._borderColor = BORDER_COLOR;
@@ -87,13 +92,89 @@ export class NativeOverlay {
     this._innerFrame = null;
     this._handleWidgets = [];
     this._annotationsArea = null;
+    this._draftArea = null;
     this._magnifierArea = null;
     this._lastMagnifierUpdate = 0;
     this._toolbar = null;
     this._sizeBadge = null;
     this._tips = null;
     this._tooltip = null;
-    this._popup = null;
+    this._layoutLaterId = 0;
+    this._inputPanelRaised = false;
+    this._monitors = [];
+    this._refreshMonitors();
+  }
+
+  _refreshMonitors() {
+    this._monitors = [];
+    for (let i = 0; i < global.display.get_n_monitors(); i++) {
+      const geometry = global.display.get_monitor_geometry(i);
+      this._monitors.push({
+        x: geometry.x,
+        y: geometry.y,
+        w: geometry.width,
+        h: geometry.height,
+        scale: global.display.get_monitor_scale(i) || 1,
+      });
+    }
+  }
+
+  _monitorAtPoint(point) {
+    for (const monitor of this._monitors) {
+      if (point.x >= monitor.x && point.x < monitor.x + monitor.w &&
+          point.y >= monitor.y && point.y < monitor.y + monitor.h)
+        return monitor;
+    }
+    return this._monitors[0] ?? {
+      x: 0, y: 0, w: global.stage.width, h: global.stage.height,
+    };
+  }
+
+  _outputScaleForSelection() {
+    let scale = 0;
+    const selection = this._selection;
+    if (!selection)
+      return this._scale || 1;
+    const right = selection.x + selection.w;
+    const bottom = selection.y + selection.h;
+    for (const monitor of this._monitors) {
+      const overlapW = Math.min(right, monitor.x + monitor.w) -
+        Math.max(selection.x, monitor.x);
+      const overlapH = Math.min(bottom, monitor.y + monitor.h) -
+        Math.max(selection.y, monitor.y);
+      if (overlapW > 0 && overlapH > 0)
+        scale = Math.max(scale, monitor.scale);
+    }
+    return scale > 0 ? scale : (this._scale || 1);
+  }
+
+  _selectionDpi() {
+    // PNG/JPEG metadata uses the desktop's logical DPI. Monitor resolution
+    // determines pixel dimensions; the scale factor determines logical DPI.
+    return Math.max(1, Math.round(96 * this._outputScaleForSelection()));
+  }
+
+  _pixelRect(rect, scale) {
+    const left = Math.round(rect.x * scale);
+    const top = Math.round(rect.y * scale);
+    const right = Math.round((rect.x + rect.w) * scale);
+    const bottom = Math.round((rect.y + rect.h) * scale);
+    return {
+      x: left,
+      y: top,
+      w: Math.max(1, right - left),
+      h: Math.max(1, bottom - top),
+    };
+  }
+
+  _logicalPixelRect(rect, scale) {
+    const pixels = this._pixelRect(rect, scale);
+    return {
+      x: pixels.x / scale,
+      y: pixels.y / scale,
+      w: pixels.w / scale,
+      h: pixels.h / scale,
+    };
   }
 
   async open() {
@@ -129,32 +210,40 @@ export class NativeOverlay {
         });
       }
     }
-    const popup = this._popup ? (() => {
-      const [x, y] = this._popup.get_transformed_position();
-      const [w, h] = this._popup.get_transformed_size();
-      const items = this._popup.get_children().map(child => {
-        const [ix, iy] = child.get_transformed_position();
-        const [iw, ih] = child.get_transformed_size();
-        return { x: ix, y: iy, w: iw, h: ih };
-      });
-      return { x, y, w, h, items };
-    })() : null;
     return JSON.stringify({
       stage: { w: global.stage.width, h: global.stage.height },
       pointer: global.get_pointer(),
       selection: this._selection,
+      saving: this._saving,
+      sizeBadge: this._sizeBadge?.get_text() ?? null,
+      draftBounds: this._draftArea?.visible ? {
+        x: this._draftArea.x, y: this._draftArea.y,
+        w: this._draftArea.width, h: this._draftArea.height,
+      } : null,
       tool: this._tool, source: this._selectionPixbuf ? 'yes' : 'no',
       cursor: this._showCursor,
       cursorContent: Boolean(this._cursorContent),
       cursorPoint: this._cursorPoint,
       cursorType: this._root?.cursor_type,
       textEntry: Boolean(this._textEntry),
+      textEntryText: this._textEntry?.entry.get_text() ?? null,
+      textEntryHeight: this._textEntry?.entry.height ?? null,
+      texts: this._annotations
+        .filter(annotation => annotation.kind === Tool.TEXT)
+        .map(annotation => annotation.text),
       tooltip: this._tooltip?.visible ? this._tooltip.get_text() : null,
+      outputScale: this._outputScaleForSelection(),
+      dpi: this._selectionDpi(),
+      inputPanelRaised: this._inputPanelRaised,
+      inputPanelAbove: this._inputPanelAbove(),
+      monitors: this._monitors,
+      nativeMonitors: this._nativeMonitors.length,
       color: this._style.color,
       width: this._style.width,
+      styleDisplay: this._toolbar?.styleDisplay ?? null,
+      annotationKinds: this._annotations.map(annotation => annotation.kind),
       toolbar: { x: tx, y: ty, w: tw, h: th, visible: this._toolbar?.visible },
       buttons,
-      popup,
     });
   }
 
@@ -249,16 +338,18 @@ export class NativeOverlay {
   }
 
   async saveTo(path) {
-    await this._ensureSelectionPixbuf();
-    const surface = this._renderSelection();
+    if (!await this._ensureSelectionPixbuf())
+      return false;
+    const surface = await this._renderSelection();
     if (!surface)
       return false;
-    saveSurface(surface, path);
+    await saveSurface(surface, path, this._selectionDpi());
     return true;
   }
 
   _refreshSelectionPixbuf() {
     if (!this._selection) {
+      this._captureGeneration++;
       this._selectionPixbuf = null;
       this._selectionPixbufRect = null;
       this._selectionCapturePromise = null;
@@ -272,12 +363,7 @@ export class NativeOverlay {
     if (!selection)
       return;
     const generation = ++this._captureGeneration;
-    const sel = {
-      x: Math.round(selection.x),
-      y: Math.round(selection.y),
-      w: Math.max(1, Math.round(selection.w)),
-      h: Math.max(1, Math.round(selection.h)),
-    };
+    const pixels = this._pixelRect(selection, this._scale);
     const texture = this._content.get_texture();
     const stream = Gio.MemoryOutputStream.new_resizable();
     const cursorTexture = this._showCursor && this._cursorContent
@@ -288,10 +374,10 @@ export class NativeOverlay {
     try {
       const pixbuf = await Shell.Screenshot.composite_to_stream(
         texture,
-        Math.round(sel.x * this._scale),
-        Math.round(sel.y * this._scale),
-        Math.round(sel.w * this._scale),
-        Math.round(sel.h * this._scale),
+        pixels.x,
+        pixels.y,
+        pixels.w,
+        pixels.h,
         this._scale,
         cursorTexture, cursorX, cursorY, this._cursorScale,
         stream);
@@ -299,13 +385,15 @@ export class NativeOverlay {
       if (this._closed || generation !== this._captureGeneration)
         return;
       this._selectionPixbuf = pixbuf;
-      this._selectionPixbufRect = sel;
+      this._selectionPixbufRect =
+        this._logicalPixelRect(selection, this._scale);
       this._selectionCapturePromise = null;
       this._repaint();
       log(`cosnip: selection pixels ${pixbuf.get_width()}x${pixbuf.get_height()}`);
     } catch (error) {
       stream.close(null);
-      this._selectionCapturePromise = null;
+      if (generation === this._captureGeneration)
+        this._selectionCapturePromise = null;
       logError(error, 'cosnip: cannot capture selection pixels');
     }
   }
@@ -313,22 +401,17 @@ export class NativeOverlay {
   async _ensureSelectionPixbuf() {
     if (!this._selection)
       return false;
-    const sel = {
-      x: Math.round(this._selection.x),
-      y: Math.round(this._selection.y),
-      w: Math.max(1, Math.round(this._selection.w)),
-      h: Math.max(1, Math.round(this._selection.h)),
-    };
-    if (this._selectionPixbuf &&
-      sameRect(this._selectionPixbufRect, sel))
-      return true;
+    const selection = this._selection;
+    const expected = this._logicalPixelRect(selection, this._scale);
     if (this._selectionCapturePromise)
       await this._selectionCapturePromise;
     if (!this._selectionPixbuf ||
-      !sameRect(this._selectionPixbufRect, sel)) {
+      !sameRect(this._selectionPixbufRect, expected)) {
       await this._captureSelectionPixbuf();
     }
-    return Boolean(this._selectionPixbuf);
+    return !this._closed && this._selection === selection &&
+      sameRect(this._selectionPixbufRect, expected) &&
+      Boolean(this._selectionPixbuf);
   }
 
   _buildUI() {
@@ -339,7 +422,7 @@ export class NativeOverlay {
       reactive: true,
       can_focus: true,
       cursor_type: Clutter.CursorType.CROSSHAIR,
-      layout_manager: new Clutter.BinLayout(),
+      layout_manager: new Clutter.FixedLayout(),
       width: stageWidth,
       height: stageHeight,
     });
@@ -349,6 +432,8 @@ export class NativeOverlay {
       width: stageWidth,
       height: stageHeight,
     });
+    this._background.set_content_scaling_filters(
+      Clutter.ScalingFilter.NEAREST, Clutter.ScalingFilter.NEAREST);
     this._root.add_child(this._background);
 
     const maskStyle = `background-color: rgba(${this._maskColor[0]}, ` +
@@ -364,9 +449,17 @@ export class NativeOverlay {
     }
 
     this._annotationsArea = new St.DrawingArea({ reactive: false });
+    this._annotationsArea.set_content_scaling_filters(
+      Clutter.ScalingFilter.NEAREST, Clutter.ScalingFilter.NEAREST);
     this._annotationsArea.connect('repaint',
       area => this._paintAnnotations(area));
     this._root.add_child(this._annotationsArea);
+
+    this._draftArea = new St.DrawingArea({ reactive: false });
+    this._draftArea.set_content_scaling_filters(
+      Clutter.ScalingFilter.NEAREST, Clutter.ScalingFilter.NEAREST);
+    this._draftArea.connect('repaint', area => this._paintAnnotations(area, true));
+    this._root.add_child(this._draftArea);
 
     const frameColor = `rgba(${this._borderColor[0]}, ` +
       `${this._borderColor[1]}, ${this._borderColor[2]}, ` +
@@ -413,19 +506,17 @@ export class NativeOverlay {
       onCopy: () => this._copy(),
       onColor: color => {
         this._style.color = color;
+        this._toolbar.setStyle(color);
       },
-      onWidth: width => {
-        this._style.width = width;
-      },
-      onColorPicker: anchor => this._showColorPicker(anchor),
-      onWidthPicker: anchor => this._showWidthPicker(anchor),
       onCursor: visible => {
         this._showCursor = visible;
+        this._selectionPixbuf = null;
+        this._selectionPixbufRect = null;
         this._refreshSelectionPixbuf();
       },
       onHover: (label, button) => this._showTooltip(label, button),
     });
-    this._toolbar.setStyle(this._style.color, this._style.width);
+    this._toolbar.setStyle(this._style.color);
     this._toolbar.visible = false;
     this._root.add_child(this._toolbar);
 
@@ -454,28 +545,11 @@ export class NativeOverlay {
     this._root.connect('button-release-event', (_actor, event) => this._onRelease(event));
     this._root.connect('motion-event', (_actor, event) => this._onMotion(event));
     this._root.connect('key-press-event', (_actor, event) => this._onKey(event));
-    this._root.connect('scroll-event', (_actor, event) => this._onScroll(event));
-    this._root.connect('destroy', () => {
-      try {
-        if (this._panelBox)
-          this._panelBox.visible = this._panelVisible ?? true;
-      } catch (_error) {
-        // The panel may already be gone while the Shell is shutting down.
-      }
-    });
-
     this._windowList = this._collectWindows();
-    Main.layoutManager.screenshotUIGroup.add_child(this._root);
-    this._panelBox = Main.layoutManager.panelBox;
-    this._panelVisible = this._panelBox.visible;
-    this._panelBox.hide();
+    const group = Main.layoutManager.screenshotUIGroup;
+    group.get_parent().set_child_above_sibling(group, null);
+    group.add_child(this._root);
     this._root.show();
-    this._root.opacity = 0;
-    this._root.ease({
-      opacity: 255,
-      duration: 110,
-      mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-    });
     this._grab = Main.pushModal(this._root, {
       actionMode: Shell.ActionMode.POPUP,
     });
@@ -529,6 +603,7 @@ export class NativeOverlay {
       for (const handle of this._handleWidgets)
         handle.hide();
       this._annotationsArea.hide();
+      this._draftArea.hide();
       this._updateMagnifier();
       return;
     }
@@ -567,8 +642,10 @@ export class NativeOverlay {
       this._annotationsArea.set_position(x, y);
       this._annotationsArea.set_size(w, h);
       this._annotationsArea.show();
+      this._updateDraftArea();
     } else {
       this._annotationsArea.hide();
+      this._draftArea.hide();
     }
     this._updateMagnifier();
   }
@@ -647,10 +724,10 @@ export class NativeOverlay {
     cr.fill();
     for (let gy = 0; gy < size; gy++) {
       for (let gx = 0; gx < size; gx++) {
-        const sx = Math.round(
-          (this._pointerPos.x + gx - radius - origin.x) * this._scale);
-        const sy = Math.round(
-          (this._pointerPos.y + gy - radius - origin.y) * this._scale);
+        const sx = Math.round((this._pointerPos.x - origin.x) * this._scale) +
+          gx - radius;
+        const sy = Math.round((this._pointerPos.y - origin.y) * this._scale) +
+          gy - radius;
         const pixel = pixbufPixel(this._selectionPixbuf, sx, sy);
         cr.setSourceRGBA(
           pixel[0] / 255, pixel[1] / 255, pixel[2] / 255, 1);
@@ -696,131 +773,61 @@ export class NativeOverlay {
     }
   }
 
-  _paintAnnotations(area) {
+  _paintAnnotations(area, draft = false) {
     if (!this._selection)
       return;
     const cr = area.get_context();
-    const x = Math.round(this._selection.x);
-    const y = Math.round(this._selection.y);
+    const x = draft ? area.x : Math.round(this._selection.x);
+    const y = draft ? area.y : Math.round(this._selection.y);
     cr.save();
     cr.rectangle(0, 0, area.width, area.height);
     cr.clip();
     cr.translate(-x, -y);
-    drawAnnotations(cr, this._annotations, {
+    const annotations = draft ? (this._draft ? [this._draft] : []) : this._annotations;
+    drawAnnotations(cr, annotations, {
       sourcePixbuf: this._selectionPixbuf,
       sourceOrigin: this._selectionPixbufRect ?? this._selection,
       deviceScale: this._scale,
     });
-    if (this._draft) {
-      drawAnnotations(cr, [this._draft], {
-        sourcePixbuf: this._selectionPixbuf,
-        sourceOrigin: this._selectionPixbufRect ?? this._selection,
-        deviceScale: this._scale,
-      });
-    }
     cr.restore();
   }
 
   _repaint() {
     this._annotationsArea?.queue_repaint();
+    this._draftArea?.queue_repaint();
     this._updateMagnifier();
   }
 
-  _showColorPicker(anchor) {
-    const items = PALETTE.map(color => ({
-      value: color,
-      actor: new St.Widget({
-        width: 18,
-        height: 18,
-        style: 'border-radius: 3px; border: 1px solid rgba(0, 0, 0, 0.35); ' +
-          `background-color: rgba(${color[0]}, ${color[1]}, ${color[2]}, ` +
-          `${color[3] / 255});`,
-      }),
-    }));
-    this._showPopup(anchor, items, color => {
-      this._style.color = color;
-      this._toolbar.setStyle(color, this._style.width);
-    });
-  }
-
-  _showWidthPicker(anchor) {
-    const items = WIDTHS.map(width => {
-      const area = new St.DrawingArea({ width: 34, height: 18 });
-      area.connect('repaint', widget => {
-        const cr = widget.get_context();
-        cr.setSourceRGBA(0.12, 0.12, 0.12, 1);
-        cr.setLineWidth(Math.max(1, width));
-        cr.moveTo(3, 9);
-        cr.lineTo(31, 9);
-        cr.stroke();
-      });
-      return { value: width, actor: area };
-    });
-    this._showPopup(anchor, items, width => {
-      this._style.width = width;
-      this._toolbar.setStyle(this._style.color, width);
-    });
-  }
-
-  _showPopup(anchor, items, onSelect) {
-    this._tooltip?.hide();
-    this._closePopup();
-    const popup = new St.BoxLayout({
-      style_class: 'cosnip-popup',
-      orientation: Clutter.Orientation.HORIZONTAL,
-      reactive: true,
-    });
-    for (const item of items) {
-      const button = new St.Button({
-        style_class: 'cosnip-popup-item',
-        reactive: true,
-        can_focus: false,
-        track_hover: true,
-      });
-      button.set_child(item.actor);
-      button.connect('clicked', () => {
-        onSelect(item.value);
-        this._closePopup();
-      });
-      popup.add_child(button);
-    }
-    this._popup = popup;
-    this._root.add_child(popup);
-    const [ax, ay] = anchor.get_transformed_position();
-    const [aw, ah] = anchor.get_transformed_size();
-    const [, pw] = popup.get_preferred_width(-1);
-    const [, ph] = popup.get_preferred_height(pw);
-    let x = Math.round(ax + aw / 2 - pw / 2);
-    x = Math.max(8, Math.min(global.stage.width - pw - 8, x));
-    let y = Math.round(ay - ph - 6);
-    if (y < 8)
-      y = Math.round(ay + ah + 6);
-    popup.set_position(x, y);
-    popup.show();
-  }
-
-  _closePopup() {
-    if (!this._popup)
+  _updateDraftArea() {
+    if (!this._draft || !this._selection) {
+      this._draftArea?.hide();
       return;
-    this._popup.destroy();
-    this._popup = null;
+    }
+    const bounds = draftBounds(this._draft, this._selection, this._drag?.pathBounds);
+    if (this._draftArea.x !== bounds.x || this._draftArea.y !== bounds.y)
+      this._draftArea.set_position(bounds.x, bounds.y);
+    if (this._draftArea.width !== bounds.w || this._draftArea.height !== bounds.h)
+      this._draftArea.set_size(bounds.w, bounds.h);
+    this._draftArea.show();
   }
 
-  _popupClickAt(point) {
-    if (!this._popup?.visible)
-      return false;
-    for (const child of this._popup.get_children()) {
-      if (!child.visible)
-        continue;
-      const [x, y] = child.get_transformed_position();
-      const [w, h] = child.get_transformed_size();
-      if (point.x >= x && point.x < x + w &&
-        point.y >= y && point.y < y + h) {
-        child.emit('clicked', child);
-        return true;
-      }
-    }
-    return false;
+  _queueLayoutChrome() {
+    if (this._layoutLaterId)
+      return;
+    this._layoutLaterId = global.compositor.get_laters().add(
+      Meta.LaterType.BEFORE_REDRAW, () => {
+        this._layoutLaterId = 0;
+        if (!this._closed)
+          this._layoutChrome();
+        return GLib.SOURCE_REMOVE;
+      });
+  }
+
+  _cancelQueuedLayout() {
+    if (!this._layoutLaterId)
+      return;
+    global.compositor.get_laters().remove(this._layoutLaterId);
+    this._layoutLaterId = 0;
   }
 
   _layoutChrome() {
@@ -848,7 +855,10 @@ export class NativeOverlay {
     this._toolbar.visible = !this._drag ||
       this._drag.mode === 'annotation';
 
-    this._sizeBadge.set_text(`${Math.round(w)} x ${Math.round(h)} px`);
+    const outputPixels = this._pixelRect(
+      this._selection, this._outputScaleForSelection());
+    this._sizeBadge.set_text(
+      `${outputPixels.w} x ${outputPixels.h} px`);
     this._sizeBadge.set_position(
       Math.round(x), Math.round(Math.max(4, y - 24)));
     this._sizeBadge.visible = true;
@@ -869,7 +879,7 @@ export class NativeOverlay {
       this._commitText();
     this._tool = tool;
     this._toolbar.syncShape(tool);
-    this._toolbar.setTool(tool);
+    this._layoutChrome();
   }
 
   _collectWindows() {
@@ -911,6 +921,33 @@ export class NativeOverlay {
     return null;
   }
 
+  _snapSelectionToMonitors(rect) {
+    const threshold = 2;
+    const result = { ...rect };
+    for (const monitor of this._monitors) {
+      const right = result.x + result.w;
+      const bottom = result.y + result.h;
+      const monitorRight = monitor.x + monitor.w;
+      const monitorBottom = monitor.y + monitor.h;
+      if (right < monitor.x || result.x > monitorRight ||
+          bottom < monitor.y || result.y > monitorBottom)
+        continue;
+      if (Math.abs(result.x - monitor.x) <= threshold) {
+        result.w = right - monitor.x;
+        result.x = monitor.x;
+      }
+      if (Math.abs(result.y - monitor.y) <= threshold) {
+        result.h = bottom - monitor.y;
+        result.y = monitor.y;
+      }
+      if (Math.abs(right - monitorRight) <= threshold)
+        result.w = monitorRight - result.x;
+      if (Math.abs(bottom - monitorBottom) <= threshold)
+        result.h = monitorBottom - result.y;
+    }
+    return result;
+  }
+
   _pointer(event) {
     const [x, y] = event.get_coords();
     return { x, y };
@@ -931,7 +968,7 @@ export class NativeOverlay {
   _showTooltip(label, button) {
     if (!this._tooltip)
       return;
-    if (!label || !button || this._popup || this._drag) {
+    if (!label || !button || this._drag) {
       this._tooltip.hide();
       return;
     }
@@ -987,6 +1024,8 @@ export class NativeOverlay {
   }
 
   _onPress(event) {
+    if (this._saving)
+      return Clutter.EVENT_STOP;
     const point = this._pointer(event);
     this._tooltip?.hide();
     const entry = this._textEntry?.entry;
@@ -997,22 +1036,12 @@ export class NativeOverlay {
         point.y >= ey && point.y < ey + eh;
       if (!inside) {
         this._commitText();
-      } else {
         return Clutter.EVENT_STOP;
       }
-    }
-    if (this._popup) {
-      if (this._popupClickAt(point))
-        return Clutter.EVENT_STOP;
-      this._closePopup();
       return Clutter.EVENT_STOP;
     }
     if (this._pointInChrome(point)) {
       this._toolbar.clickAt(point);
-      return Clutter.EVENT_STOP;
-    }
-    if (this._textEntry) {
-      this._commitText();
       return Clutter.EVENT_STOP;
     }
     const button = event.get_button();
@@ -1024,6 +1053,7 @@ export class NativeOverlay {
     if (button !== 1) {
       if (this._draft) {
         this._draft = null;
+        this._updateDraftArea();
         this._repaint();
       } else if (this._tool !== Tool.SELECT) {
         this._setTool(Tool.SELECT);
@@ -1031,7 +1061,7 @@ export class NativeOverlay {
       return Clutter.EVENT_STOP;
     }
     const now = GLib.get_monotonic_time() / 1000;
-    if (this._lastClick && this._selection &&
+    if (this._tool === Tool.SELECT && this._lastClick && this._selection &&
       now - this._lastClick.time <= 350 &&
       Math.hypot(point.x - this._lastClick.x, point.y - this._lastClick.y) <= 6 &&
       contains(this._selection, point)) {
@@ -1039,7 +1069,8 @@ export class NativeOverlay {
       this._copy();
       return Clutter.EVENT_STOP;
     }
-    this._lastClick = { time: now, x: point.x, y: point.y };
+    this._lastClick = this._tool === Tool.SELECT
+      ? { time: now, x: point.x, y: point.y } : null;
     if (this._tool === Tool.SELECT) {
       if (!this._selection && this._autoDetect && this._hoverWindow) {
         this._drag = {
@@ -1092,12 +1123,17 @@ export class NativeOverlay {
       return Clutter.EVENT_STOP;
     }
     this._draft = createAnnotation(this._tool, point, this._style);
-    this._drag = { mode: 'annotation' };
+    this._drag = { mode: 'annotation', pathBounds: {
+      minX: point.x, minY: point.y, maxX: point.x, maxY: point.y,
+    } };
+    this._updateDraftArea();
     this._repaint();
     return Clutter.EVENT_STOP;
   }
 
   _onMotion(event) {
+    if (this._saving)
+      return Clutter.EVENT_STOP;
     const point = this._pointer(event);
     this._pointerPos = point;
     this._updateMagnifier();
@@ -1126,14 +1162,14 @@ export class NativeOverlay {
       const anchor = this._drag.anchor;
       this._drag = { mode: 'new', anchor };
       this._selection = rectFromPoints(anchor, point, false);
-      this._layoutChrome();
+      this._queueLayoutChrome();
       this._repaint();
       return Clutter.EVENT_STOP;
     }
     if (this._drag.mode === 'new') {
       const shift = Boolean(event.get_state() & Clutter.ModifierType.SHIFT_MASK);
       this._selection = rectFromPoints(this._drag.anchor, point, shift);
-      this._layoutChrome();
+      this._queueLayoutChrome();
     } else if (this._drag.mode === 'move') {
       const dx = point.x - this._drag.origin.x;
       const dy = point.y - this._drag.origin.y;
@@ -1143,26 +1179,38 @@ export class NativeOverlay {
         w: this._drag.start.w,
         h: this._drag.start.h,
       });
-      this._layoutChrome();
+      this._queueLayoutChrome();
     } else if (this._drag.mode === 'resize') {
       this._selection = resizeSelection(
         this._drag.start, this._drag.handle, point);
-      this._layoutChrome();
+      this._queueLayoutChrome();
     } else if (this._drag.mode === 'annotation' && this._draft) {
       const shift = Boolean(event.get_state() & Clutter.ModifierType.SHIFT_MASK);
       updateAnnotation(this._draft, point, shift);
+      const bounds = this._drag.pathBounds;
+      bounds.minX = Math.min(bounds.minX, point.x);
+      bounds.minY = Math.min(bounds.minY, point.y);
+      bounds.maxX = Math.max(bounds.maxX, point.x);
+      bounds.maxY = Math.max(bounds.maxY, point.y);
+      this._updateDraftArea();
+      this._draftArea.queue_repaint();
+      return Clutter.EVENT_STOP;
     }
     this._repaint();
     return Clutter.EVENT_STOP;
   }
 
   _onRelease(event) {
+    if (this._saving)
+      return Clutter.EVENT_STOP;
     if (!this._drag)
       return Clutter.EVENT_PROPAGATE;
     const releasePoint = this._pointer(event);
-    const mode = this._drag.mode;
-    const windowRect = this._drag.window;
+    const drag = this._drag;
+    const mode = drag.mode;
+    const windowRect = drag.window;
     this._drag = null;
+    this._cancelQueuedLayout();
     if (mode === 'window' && windowRect) {
       this._selection = { ...windowRect };
       this._hoverWindow = null;
@@ -1176,19 +1224,23 @@ export class NativeOverlay {
       if (annotationIsValid(this._draft))
         this._addAnnotation(this._draft);
       this._draft = null;
+      this._updateDraftArea();
       this._repaint();
     } else if (mode === 'new') {
       if (this._selection && (this._selection.w < 3 || this._selection.h < 3)) {
         this._selection = null;
         this._layoutChrome();
       } else if (this._selection) {
+        this._selection = this._snapSelectionToMonitors(this._selection);
         this._layoutChrome();
         this._refreshSelectionPixbuf();
       }
       this._repaint();
     } else if (mode === 'move' || mode === 'resize') {
-      if (this._selection)
+      if (this._selection) {
+        this._selection = this._snapSelectionToMonitors(this._selection);
         this._refreshSelectionPixbuf();
+      }
       this._layoutChrome();
       this._repaint();
     }
@@ -1196,29 +1248,13 @@ export class NativeOverlay {
     return Clutter.EVENT_STOP;
   }
 
-  _onScroll(event) {
-    if (!this._selection)
-      return Clutter.EVENT_STOP;
-    const direction = event.get_scroll_direction();
-    let delta = 0;
-    if (direction === Clutter.ScrollDirection.SMOOTH) {
-      const [dx, dy] = event.get_scroll_delta();
-      delta = dy !== 0 ? dy : -dx;
-    } else if (direction === Clutter.ScrollDirection.UP) {
-      delta = 1;
-    } else if (direction === Clutter.ScrollDirection.DOWN) {
-      delta = -1;
-    }
-    if (delta === 0)
-      return Clutter.EVENT_STOP;
-    this._style.width = Math.max(1, Math.min(32,
-      this._style.width + Math.sign(delta)));
-    this._toolbar.setStyle(this._style.color, this._style.width);
-    return Clutter.EVENT_STOP;
-  }
-
   _onKey(event) {
     const symbol = event.get_key_symbol();
+    if (this._saving) {
+      if (symbol === Clutter.KEY_Escape)
+        this._close();
+      return Clutter.EVENT_STOP;
+    }
     const state = event.get_state();
     const ctrl = Boolean(state & Clutter.ModifierType.CONTROL_MASK);
     const shift = Boolean(state & Clutter.ModifierType.SHIFT_MASK);
@@ -1255,9 +1291,11 @@ export class NativeOverlay {
       return Clutter.EVENT_STOP;
     }
     if (ctrl && symbol === Clutter.KEY_a) {
+      const [pointerX, pointerY] = global.get_pointer();
+      const monitor = this._monitorAtPoint({ x: pointerX, y: pointerY });
       this._selection = {
-        x: 0, y: 0,
-        w: global.stage.width, h: global.stage.height,
+        x: monitor.x, y: monitor.y,
+        w: monitor.w, h: monitor.h,
       };
       this._refreshSelectionPixbuf();
       this._layoutChrome();
@@ -1292,11 +1330,21 @@ export class NativeOverlay {
   _escape() {
     if (this._draft) {
       this._draft = null;
+      this._updateDraftArea();
       this._repaint();
       return;
     }
     if (this._tool !== Tool.SELECT) {
       this._setTool(Tool.SELECT);
+      return;
+    }
+    if (this._selection) {
+      this._selection = null;
+      this._hoverWindow = null;
+      this._clearAnnotations();
+      this._refreshSelectionPixbuf();
+      this._layoutChrome();
+      this._repaint();
       return;
     }
     this._close();
@@ -1307,6 +1355,7 @@ export class NativeOverlay {
     this._undo = [];
     this._redo = [];
     this._draft = null;
+    this._updateDraftArea();
   }
 
   _addAnnotation(annotation) {
@@ -1318,6 +1367,7 @@ export class NativeOverlay {
   _undoAction() {
     if (this._draft) {
       this._draft = null;
+      this._updateDraftArea();
       this._repaint();
       return;
     }
@@ -1340,6 +1390,69 @@ export class NativeOverlay {
     this._repaint();
   }
 
+  _inputPanelAbove() {
+    try {
+      const panel = global.compositor.get_input_panel_group?.();
+      const uiGroup = panel?.get_parent?.();
+      const overlayGroup = Main.layoutManager.screenshotUIGroup;
+      if (!panel || !uiGroup || !overlayGroup)
+        return false;
+      let panelIndex = -1;
+      let overlayIndex = -1;
+      const children = uiGroup.get_children();
+      for (let i = 0; i < children.length; i++) {
+        if (children[i] === panel)
+          panelIndex = i;
+        if (children[i] === overlayGroup)
+          overlayIndex = i;
+      }
+      return panelIndex > overlayIndex;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  _raiseInputPanel() {
+    try {
+      const panel = global.compositor.get_input_panel_group?.();
+      const uiGroup = panel?.get_parent?.();
+      const overlayGroup = Main.layoutManager.screenshotUIGroup;
+      if (!panel || !uiGroup || !overlayGroup ||
+          !uiGroup.contains(overlayGroup))
+        return;
+      uiGroup.set_child_above_sibling(panel, overlayGroup);
+      this._inputPanelRaised = true;
+    } catch (error) {
+      logError(error, 'cosnip: cannot raise the input panel');
+    }
+  }
+
+  _restoreInputPanel() {
+    if (!this._inputPanelRaised)
+      return;
+    this._inputPanelRaised = false;
+    try {
+      const panel = global.compositor.get_input_panel_group?.();
+      const uiGroup = panel?.get_parent?.();
+      const overlayGroup = Main.layoutManager.screenshotUIGroup;
+      if (!panel || !uiGroup || !overlayGroup ||
+          !uiGroup.contains(overlayGroup))
+        return;
+      uiGroup.set_child_below_sibling(panel, overlayGroup);
+    } catch (error) {
+      logError(error, 'cosnip: cannot restore the input panel');
+    }
+  }
+
+  _insertTextNewline(entry) {
+    const text = entry.get_text();
+    const position = entry.clutter_text.get_cursor_position();
+    const cursor = position < 0 ? text.length : position;
+    entry.set_text(`${text.slice(0, cursor)}\n${text.slice(cursor)}`);
+    entry.clutter_text.set_cursor_position(cursor + 1);
+    entry.queue_relayout();
+  }
+
   _createTextEntry(point) {
     const entry = new St.Entry({
       style_class: 'cosnip-text-entry',
@@ -1348,35 +1461,50 @@ export class NativeOverlay {
       width: Math.min(360, Math.max(120, this._selection.w - (point.x - this._selection.x))),
     });
     entry.set_style(
-      `font-size: ${this._style.fontSize}px; ` +
+      `font-family: Sans; font-size: ${this._style.fontSize}px; ` +
       `color: rgb(${this._style.color[0]}, ${this._style.color[1]}, ` +
-      `${this._style.color[2]});`);
-    entry.set_position(Math.round(point.x), Math.round(point.y));
+      `${this._style.color[2]}); padding: 1px 2px;`);
+    entry.clutter_text.single_line_mode = false;
+    entry.clutter_text.line_wrap = true;
+    entry.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
+    entry.set_position(
+      Math.round(point.x - 2), Math.round(point.y - 1));
     this._root.add_child(entry);
     this._textEntry = { entry, point };
     entry.grab_key_focus();
+    this._raiseInputPanel();
     entry.clutter_text.set_cursor_position(0);
     entry.connect('key-focus-out', () => {
       if (this._textEntry?.entry === entry)
         this._commitText();
     });
-    entry.connect('key-press-event', (_text, event) => {
+    entry.clutter_text.connect('captured-event', (_text, event) => {
+      if (event.type() !== Clutter.EventType.KEY_PRESS)
+        return Clutter.EVENT_PROPAGATE;
       const symbol = event.get_key_symbol();
-      if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
-        this._commitText();
-        return Clutter.EVENT_STOP;
-      }
       if (symbol === Clutter.KEY_Escape) {
         this._cancelText();
         return Clutter.EVENT_STOP;
       }
-      return Clutter.EVENT_PROPAGATE;
+      if (symbol !== Clutter.KEY_Return && symbol !== Clutter.KEY_KP_Enter)
+        return Clutter.EVENT_PROPAGATE;
+      if (entry.clutter_text.has_preedit())
+        return Clutter.EVENT_PROPAGATE;
+      const ctrl = Boolean(event.get_state() &
+        Clutter.ModifierType.CONTROL_MASK);
+      if (ctrl) {
+        this._commitText();
+        return Clutter.EVENT_STOP;
+      }
+      this._insertTextNewline(entry);
+      return Clutter.EVENT_STOP;
     });
   }
 
   _commitText() {
     if (!this._textEntry)
       return;
+    this._restoreInputPanel();
     const { entry, point } = this._textEntry;
     const text = entry.get_text().trim();
     this._textEntry = null;
@@ -1399,13 +1527,50 @@ export class NativeOverlay {
   _cancelText() {
     if (!this._textEntry)
       return;
+    this._restoreInputPanel();
     this._textEntry.entry.destroy();
     this._textEntry = null;
     this._root.grab_key_focus();
   }
 
-  _renderSelection() {
-    if (!this._selection)
+  async _nativeSelection() {
+    if (this._showCursor || !this._selection || !this._nativeMonitors.length)
+      return null;
+    const selection = this._selection;
+    for (const monitor of this._nativeMonitors) {
+      const { geometry, scale } = monitor;
+      if (selection.x < geometry.x || selection.y < geometry.y ||
+          selection.x + selection.w > geometry.x + geometry.width + 0.01 ||
+          selection.y + selection.h > geometry.y + geometry.height + 0.01)
+        continue;
+      const pixbuf = await monitor.pixbuf;
+      if (!pixbuf)
+        continue;
+      const left = Math.round((selection.x - geometry.x) * scale);
+      const top = Math.round((selection.y - geometry.y) * scale);
+      const right = Math.round(
+        (selection.x + selection.w - geometry.x) * scale);
+      const bottom = Math.round(
+        (selection.y + selection.h - geometry.y) * scale);
+      const width = Math.max(1, right - left);
+      const height = Math.max(1, bottom - top);
+      if (left < 0 || top < 0 ||
+          left + width > pixbuf.get_width() ||
+          top + height > pixbuf.get_height())
+        continue;
+      return {
+        pixbuf: pixbuf.new_subpixbuf(left, top, width, height),
+        scale,
+        origin: { x: selection.x, y: selection.y },
+        width,
+        height,
+      };
+    }
+    return null;
+  }
+
+  async _renderSelection() {
+    if (!this._selection || !this._selectionPixbuf)
       return null;
     const sel = {
       x: Math.round(this._selection.x),
@@ -1413,23 +1578,27 @@ export class NativeOverlay {
       w: Math.max(1, Math.round(this._selection.w)),
       h: Math.max(1, Math.round(this._selection.h)),
     };
-    const deviceW = Math.max(1, Math.round(sel.w * this._scale));
-    const deviceH = Math.max(1, Math.round(sel.h * this._scale));
-    const surface = new cairo.ImageSurface(cairo.Format.ARGB32, deviceW, deviceH);
+    const native = await this._nativeSelection();
+    const outputScale = native?.scale ?? this._outputScaleForSelection();
+    const outputPixels = native
+      ? { w: native.width, h: native.height }
+      : this._pixelRect(this._selection, outputScale);
+    const surface = new cairo.ImageSurface(
+      cairo.Format.ARGB32, outputPixels.w, outputPixels.h);
     const cr = new cairo.Context(surface);
-    if (this._selectionPixbuf) {
-      paintPixbuf(cr, this._selectionPixbuf, 0, 0, 1);
+    if (native) {
+      paintPixbuf(cr, native.pixbuf, 0, 0, 1);
     } else {
-      cr.setSourceRGBA(0, 0, 0, 1);
-      cr.paint();
+      paintPixbuf(cr, this._selectionPixbuf, 0, 0,
+        outputScale / this._scale, cairo.Filter.BEST);
     }
     cr.save();
-    cr.scale(this._scale, this._scale);
+    cr.scale(outputScale, outputScale);
     cr.translate(-sel.x, -sel.y);
     drawAnnotations(cr, this._annotations, {
-      sourcePixbuf: this._selectionPixbuf,
-      sourceOrigin: this._selectionPixbufRect ?? sel,
-      deviceScale: this._scale,
+      sourcePixbuf: native?.pixbuf ?? this._selectionPixbuf,
+      sourceOrigin: native?.origin ?? (this._selectionPixbufRect ?? sel),
+      deviceScale: native?.scale ?? this._scale,
     });
     cr.restore();
     return surface;
@@ -1449,40 +1618,80 @@ export class NativeOverlay {
     }
   }
 
-  async _copy() {
-    await this._ensureSelectionPixbuf();
-    const surface = this._renderSelection();
-    if (!surface)
-      return;
-    copySurfaceToClipboard(surface);
-    this._notify('Copied selection');
-    this._close();
-  }
-
-  async _save() {
-    await this._ensureSelectionPixbuf();
-    const surface = this._renderSelection();
-    if (!surface)
-      return;
+  async _saveSurfaceToDisk(surface) {
     const dirSetting = this._settings.get_string('save-dir').trim();
     const dir = dirSetting || defaultSaveDir();
     const now = GLib.DateTime.new_now_local();
-    const name = expandFilename(this._settings.get_string('filename'), now);
-    const path = uniquePath(dir, name);
-    try {
-      saveSurface(surface, path);
-      this._notify(`Saved ${path}`);
-    } catch (error) {
-      logError(error, 'cosnip: save failed');
-      this._notify('Save failed; see log');
+    const format = this._settings.get_enum('save-format') === 1
+      ? 'jpeg' : 'png';
+    const extension = format === 'jpeg' ? '.jpg' : '.png';
+    const base = expandFilename(this._settings.get_string('filename'), now)
+      .replace(/\.(png|jpe?g)$/i, '');
+    const path = uniquePath(dir, `${base}${extension}`);
+    await saveSurface(surface, path, this._selectionDpi(), format);
+    return path;
+  }
+
+  async _copy() {
+    if (!await this._ensureSelectionPixbuf()) {
+      this._notify('Capture failed; try again');
       return;
+    }
+    const surface = await this._renderSelection();
+    if (!surface)
+      return;
+    copySurfaceToClipboard(surface, this._selectionDpi());
+    if (this._settings.get_boolean('save-on-copy')) {
+      try {
+        const path = await this._saveSurfaceToDisk(surface);
+        this._notifySaved(path, 'Screenshot copied and saved');
+      } catch (error) {
+        log(`cosnip: copy-save failed (error ${error.code ?? 'unknown'})`);
+        this._notify('Copied; image save failed');
+      }
+    } else {
+      this._notify('Copied selection');
     }
     this._close();
   }
 
+  async _save() {
+    if (this._saving)
+      return;
+    const badgeText = this._sizeBadge?.get_text() ?? null;
+    this._saving = true;
+    this._toolbar?.setSaving(true);
+    this._sizeBadge?.set_text('Saving…');
+    try {
+      if (!await this._ensureSelectionPixbuf()) {
+        this._notify('Capture failed; try again');
+        return;
+      }
+      const surface = await this._renderSelection();
+      if (!surface)
+        return;
+      const path = await this._saveSurfaceToDisk(surface);
+      this._notifySaved(path);
+      this._close();
+    } catch (error) {
+      log(`cosnip: save failed (error ${error.code ?? 'unknown'})`);
+      this._notify('Save failed; see log');
+    } finally {
+      this._saving = false;
+      if (!this._closed) {
+        this._toolbar?.setSaving(false);
+        if (badgeText !== null)
+          this._sizeBadge?.set_text(badgeText);
+      }
+    }
+  }
+
   async _pin() {
-    await this._ensureSelectionPixbuf();
-    const surface = this._renderSelection();
+    if (!await this._ensureSelectionPixbuf()) {
+      this._notify('Capture failed; try again');
+      return;
+    }
+    const surface = await this._renderSelection();
     if (!surface || !this._selection)
       return;
     this._onPin?.(
@@ -1492,6 +1701,30 @@ export class NativeOverlay {
       Math.max(1, Math.round(this._selection.w)),
       Math.max(1, Math.round(this._selection.h)));
     this._close();
+  }
+
+  _notifySaved(path, title = 'Screenshot saved') {
+    try {
+      const file = Gio.File.new_for_path(path);
+      const source = MessageTray.getSystemSource();
+      const notification = new MessageTray.Notification({
+        source,
+        title,
+        body: file.get_basename(),
+      });
+      const openFolder = () => {
+        const folder = file.get_parent();
+        if (!folder)
+          return;
+        Gio.AppInfo.launch_default_for_uri(folder.get_uri(), null);
+      };
+      notification.connect('activated', openFolder);
+      notification.addAction('Open folder', openFolder);
+      source.addNotification(notification);
+    } catch (error) {
+      logError(error, 'cosnip: cannot show save notification');
+      this._notify(`Saved ${path}`);
+    }
   }
 
   _notify(message) {
@@ -1510,15 +1743,14 @@ export class NativeOverlay {
     if (this._closed)
       return;
     this._closed = true;
-    this._closePopup();
+    this._cancelQueuedLayout();
     this._tooltip = null;
     this._cancelText();
+    this._restoreInputPanel();
     if (this._grab) {
       Main.popModal(this._grab);
       this._grab = null;
     }
-    if (this._panelBox)
-      this._panelBox.visible = this._panelVisible ?? true;
     this._root?.destroy();
     this._root = null;
     this._onClose?.();
