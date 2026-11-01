@@ -1,9 +1,12 @@
 import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
 import cairo from 'cairo';
 
 import { Tool } from './annotations.js';
+
+const ICON_BASE = import.meta.url.replace(/\/[^/]+$/, '');
 
 export const PALETTE = [
   [255, 64, 64, 255],
@@ -16,21 +19,18 @@ export const PALETTE = [
 ];
 export const WIDTHS = [1, 2, 3, 4, 6, 8];
 
-const ICONS = {
-  SHAPES: 'shapes',
-  LINE: 'line',
-  ARROW: 'arrow',
-  MARKER: 'marker',
+const TOOL_ICONS = {
+  shapes: 'rectangle-symbolic.svg',
+  line: 'line-symbolic.svg',
+  arrow: 'arrow-symbolic.svg',
+  marker: 'marker-symbolic.svg',
+  mosaic: 'mosaic-symbolic.svg',
+  text: 'text-symbolic.svg',
+  eraser: 'eraser-symbolic.svg',
 };
 
 const NATIVE_ICONS = {
   pencil: 'document-edit-symbolic',
-  mosaic: 'view-grid-symbolic',
-  text: 'insert-text-symbolic',
-  magnifier: 'edit-find-symbolic',
-  eraser: 'edit-clear-symbolic',
-  undo: 'edit-undo-symbolic',
-  redo: 'edit-redo-symbolic',
   cancel: 'window-close-symbolic',
   pin: 'view-pin-symbolic',
   save: 'document-save-symbolic',
@@ -54,60 +54,62 @@ export const Toolbar = GObject.registerClass({
     this._shapeTool = Tool.RECT;
     this._mosaicTool = Tool.MOSAIC;
     this._buttons = new Map();
-    this._undo = null;
-    this._redo = null;
     this._colorIndex = 0;
     this._widthIndex = 1;
     this._hoverButton = null;
     this._cursorVisible = false;
     this._cursorButton = null;
 
-    this._addTool('shapes', ICONS.SHAPES, () => {
+    this._addTool('shapes', 'shapes', () => {
       this._shapeTool = Tool.RECT;
       this._callbacks.onTool(this._shapeTool);
-    });
-    this._addTool('line', ICONS.LINE, () => this._callbacks.onTool(Tool.LINE));
-    this._addTool('arrow', ICONS.ARROW, () => this._callbacks.onTool(Tool.ARROW));
-    this._addTool('pencil', 'pencil', () => this._callbacks.onTool(Tool.PENCIL));
-    this._addTool('marker', ICONS.MARKER, () => this._callbacks.onTool(Tool.MARKER));
+    }, 'Rectangle');
+    this._addTool('line', 'line', () => this._callbacks.onTool(Tool.LINE),
+      'Line');
+    this._addTool('arrow', 'arrow', () => this._callbacks.onTool(Tool.ARROW),
+      'Arrow');
+    this._addTool('pencil', 'pencil',
+      () => this._callbacks.onTool(Tool.PENCIL), 'Pencil');
+    this._addTool('marker', 'marker',
+      () => this._callbacks.onTool(Tool.MARKER), 'Highlighter');
     this._addTool('mosaic', 'mosaic', () => {
       this._mosaicTool = this._mosaicTool === Tool.MOSAIC
         ? Tool.BLUR : Tool.MOSAIC;
       this._callbacks.onTool(this._mosaicTool);
-    });
-    this._addTool('text', 'text', () => this._callbacks.onTool(Tool.TEXT));
-    this._addTool('magnifier', 'magnifier',
-      () => this._callbacks.onTool(Tool.MAGNIFIER));
+    }, 'Mosaic / Blur');
+    this._addTool('text', 'text', () => this._callbacks.onTool(Tool.TEXT),
+      'Text');
     this._addTool('eraser', 'eraser',
-      () => this._callbacks.onTool(Tool.ERASER));
+      () => this._callbacks.onTool(Tool.ERASER), 'Eraser');
     this._colorButton = new ColorButton(PALETTE[this._colorIndex],
       () => this._callbacks.onColorPicker?.(this._colorButton));
     this._colorButton.reactive = false;
+    this._colorButton._tooltip = 'Color';
     this.add_child(this._colorButton);
     this._widthButton = new WidthButton(WIDTHS[this._widthIndex],
       () => this._callbacks.onWidthPicker?.(this._widthButton));
     this._widthButton.reactive = false;
+    this._widthButton._tooltip = 'Line width';
     this.add_child(this._widthButton);
 
-    this._separator();
-    this._undo = this._addTool('undo', 'undo', () => this._callbacks.onUndo());
-    this._redo = this._addTool('redo', 'redo', () => this._callbacks.onRedo());
     this._separator();
     this._cursorButton = this._addTool('cursor', 'cursor', () => {
       this._cursorVisible = !this._cursorVisible;
       this.setCursorVisible(this._cursorVisible);
       this._callbacks.onCursor?.(this._cursorVisible);
-    });
-    this._addTool('cancel', 'cancel', () => this._callbacks.onCancel());
-    this._addTool('pin', 'pin', () => this._callbacks.onPin());
-    this._addTool('save', 'save', () => this._callbacks.onSave());
-    this._addTool('copy', 'copy', () => this._callbacks.onCopy());
+    }, 'Capture cursor');
+    this._addTool('cancel', 'cancel', () => this._callbacks.onCancel(),
+      'Cancel');
+    this._addTool('pin', 'pin', () => this._callbacks.onPin(), 'Pin');
+    this._addTool('save', 'save', () => this._callbacks.onSave(), 'Save');
+    this._addTool('copy', 'copy', () => this._callbacks.onCopy(), 'Copy');
   }
 
-  _addTool(name, icon, handler) {
+  _addTool(name, icon, handler, tooltip = name) {
     const button = new ToolButton(icon, handler);
     button.reactive = false;
     button.track_hover = false;
+    button._tooltip = tooltip;
     this._buttons.set(name, button);
     this.add_child(button);
     return button;
@@ -131,7 +133,6 @@ export const Toolbar = GObject.registerClass({
     this.setActive('marker', tool === Tool.MARKER);
     this.setActive('mosaic', tool === Tool.MOSAIC || tool === Tool.BLUR);
     this.setActive('text', tool === Tool.TEXT);
-    this.setActive('magnifier', tool === Tool.MAGNIFIER);
     this.setActive('eraser', tool === Tool.ERASER);
   }
 
@@ -145,14 +146,6 @@ export const Toolbar = GObject.registerClass({
     const button = this._buttons.get(name);
     if (button)
       button.setActive(active);
-  }
-
-  setUndo(enabled) {
-    this._undo?.setEnabled(enabled);
-  }
-
-  setRedo(enabled) {
-    this._redo?.setEnabled(enabled);
   }
 
   setCursorVisible(visible) {
@@ -180,6 +173,7 @@ export const Toolbar = GObject.registerClass({
     this._hoverButton?.remove_style_class_name('cosnip-tool-hover');
     this._hoverButton = target;
     this._hoverButton?.add_style_class_name('cosnip-tool-hover');
+    this._callbacks.onHover?.(target?._tooltip ?? null, target);
   }
 
   clearHover() {
@@ -187,6 +181,7 @@ export const Toolbar = GObject.registerClass({
       return;
     this._hoverButton.remove_style_class_name('cosnip-tool-hover');
     this._hoverButton = null;
+    this._callbacks.onHover?.(null, null);
   }
 
   buttonAt(point) {
@@ -317,28 +312,19 @@ const ToolButton = GObject.registerClass({
     this.accessible_name = icon;
     this._active = false;
     this._enabled = true;
-    this._nativeIcon = NATIVE_ICONS[icon] ?? null;
-    if (this._nativeIcon) {
-      this._area = new St.Icon({
-        icon_name: this._nativeIcon,
-        icon_size: 16,
-        style_class: 'cosnip-tool-icon',
-        y_align: Clutter.ActorAlign.CENTER,
-        x_align: Clutter.ActorAlign.CENTER,
-      });
-    } else {
-      this._area = new St.DrawingArea({
-        width: 20,
-        height: 20,
-        y_align: Clutter.ActorAlign.CENTER,
-        x_align: Clutter.ActorAlign.CENTER,
-      });
-      this._area.connect('repaint', area => {
-        const cr = area.get_context();
-        paintIcon(cr, this._icon, area.width || 20,
-          this._active ? [1, 1, 1, 1] : [0.18, 0.18, 0.18, 1]);
-      });
-    }
+    const nativeIcon = NATIVE_ICONS[icon] ?? null;
+    const fileIcon = TOOL_ICONS[icon] ?? null;
+    const iconProps = {
+      icon_size: 16,
+      style_class: 'cosnip-tool-icon',
+      y_align: Clutter.ActorAlign.CENTER,
+      x_align: Clutter.ActorAlign.CENTER,
+    };
+    if (fileIcon)
+      iconProps.gicon = Gio.icon_new_for_string(`${ICON_BASE}/icons/${fileIcon}`);
+    else
+      iconProps.icon_name = nativeIcon ?? 'image-missing-symbolic';
+    this._area = new St.Icon(iconProps);
     this.set_child(this._area);
     this.connect('clicked', () => {
       if (this._enabled)
@@ -354,8 +340,7 @@ const ToolButton = GObject.registerClass({
       this.add_style_class_name('cosnip-tool-active');
     else
       this.remove_style_class_name('cosnip-tool-active');
-    if (!this._nativeIcon)
-      this._area.queue_repaint();
+
   }
 
   setEnabled(enabled) {
@@ -365,51 +350,3 @@ const ToolButton = GObject.registerClass({
     this.opacity = enabled ? 255 : 120;
   }
 });
-
-function paintIcon(cr, icon, size, color) {
-  const scale = size / 24;
-  cr.save();
-  cr.scale(scale, scale);
-  cr.setLineWidth(1.7);
-  cr.setLineCap(cairo.LineCap.ROUND);
-  cr.setLineJoin(cairo.LineJoin.ROUND);
-  cr.setSourceRGBA(...color);
-  const line = (x1, y1, x2, y2) => {
-    cr.moveTo(x1, y1);
-    cr.lineTo(x2, y2);
-  };
-  const rect = (x, y, w, h) => cr.rectangle(x, y, w, h);
-  switch (icon) {
-    case ICONS.SHAPES:
-      rect(3.5, 5.5, 17, 13);
-      cr.stroke();
-      break;
-    case ICONS.LINE:
-      line(4, 18, 20, 6);
-      cr.stroke();
-      rect(2.5, 16.5, 3, 3);
-      cr.fill();
-      rect(18.5, 4.5, 3, 3);
-      cr.fill();
-      break;
-    case ICONS.ARROW:
-      line(5, 19, 19, 5);
-      cr.moveTo(13.5, 5);
-      cr.lineTo(19, 5);
-      cr.lineTo(19, 10.5);
-      cr.stroke();
-      break;
-    case ICONS.MARKER:
-      line(5, 19, 17, 7);
-      cr.setLineWidth(4.5);
-      cr.stroke();
-      cr.setLineWidth(1.7);
-      cr.moveTo(16, 6);
-      cr.lineTo(20, 10);
-      cr.stroke();
-      break;
-    default:
-      break;
-  }
-  cr.restore();
-}

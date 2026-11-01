@@ -16,7 +16,8 @@
     background-color: rgba(0, 0, 0, 0.12);
 }
 
-.cosnip-tool-active {
+.cosnip-tool-button.cosnip-tool-active,
+.cosnip-tool-button.cosnip-tool-active:hover {
     background-color: #3468b2;
 }
 
@@ -74,4 +75,12 @@
 
 .cosnip-popup-item:hover {
     background-color: rgba(0, 0, 0, 0.12);
+}
+
+.cosnip-tooltip {
+    background-color: rgba(0, 0, 0, 0.82);
+    color: white;
+    border-radius: 5px;
+    padding: 3px 7px;
+    font-size: 11px;
 }

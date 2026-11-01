@@ -92,6 +92,7 @@ export class NativeOverlay {
     this._toolbar = null;
     this._sizeBadge = null;
     this._tips = null;
+    this._tooltip = null;
     this._popup = null;
   }
 
@@ -148,6 +149,7 @@ export class NativeOverlay {
       cursorPoint: this._cursorPoint,
       cursorType: this._root?.cursor_type,
       textEntry: Boolean(this._textEntry),
+      tooltip: this._tooltip?.visible ? this._tooltip.get_text() : null,
       color: this._style.color,
       width: this._style.width,
       toolbar: { x: tx, y: ty, w: tw, h: th, visible: this._toolbar?.visible },
@@ -405,8 +407,6 @@ export class NativeOverlay {
 
     this._toolbar = new Toolbar({
       onTool: tool => this._setTool(tool),
-      onUndo: () => this._undoAction(),
-      onRedo: () => this._redoAction(),
       onCancel: () => this._close(),
       onPin: () => this._pin(),
       onSave: () => this._save(),
@@ -423,6 +423,7 @@ export class NativeOverlay {
         this._showCursor = visible;
         this._refreshSelectionPixbuf();
       },
+      onHover: (label, button) => this._showTooltip(label, button),
     });
     this._toolbar.setStyle(this._style.color, this._style.width);
     this._toolbar.visible = false;
@@ -442,6 +443,12 @@ export class NativeOverlay {
       '<b>Drag</b> select   <b>Shift</b> square   <b>Enter</b> copy\n' +
       '<b>Ctrl+S</b> save   <b>P</b> pin   <b>Tab</b> window detect   <b>Esc</b> cancel');
     this._root.add_child(this._tips);
+
+    this._tooltip = new St.Label({
+      style_class: 'cosnip-tooltip',
+      visible: false,
+    });
+    this._root.add_child(this._tooltip);
 
     this._root.connect('button-press-event', (_actor, event) => this._onPress(event));
     this._root.connect('button-release-event', (_actor, event) => this._onRelease(event));
@@ -756,6 +763,7 @@ export class NativeOverlay {
   }
 
   _showPopup(anchor, items, onSelect) {
+    this._tooltip?.hide();
     this._closePopup();
     const popup = new St.BoxLayout({
       style_class: 'cosnip-popup',
@@ -819,6 +827,7 @@ export class NativeOverlay {
     this._layoutVisuals();
     if (!this._selection) {
       this._toolbar.visible = false;
+      this._tooltip?.hide();
       this._sizeBadge.visible = false;
       this._tips.visible = this._settings.get_boolean('show-tips');
       this._tips.set_position(12, global.stage.height - 58);
@@ -919,6 +928,27 @@ export class NativeOverlay {
     return false;
   }
 
+  _showTooltip(label, button) {
+    if (!this._tooltip)
+      return;
+    if (!label || !button || this._popup || this._drag) {
+      this._tooltip.hide();
+      return;
+    }
+    this._tooltip.set_text(label);
+    const [, tw] = this._tooltip.get_preferred_width(-1);
+    const [, th] = this._tooltip.get_preferred_height(tw);
+    const [bx, by] = button.get_transformed_position();
+    const [bw, bh] = button.get_transformed_size();
+    let x = Math.round(bx + bw / 2 - tw / 2);
+    x = Math.max(8, Math.min(global.stage.width - tw - 8, x));
+    let y = Math.round(by - th - 6);
+    if (y < 8)
+      y = Math.round(by + bh + 6);
+    this._tooltip.set_position(x, y);
+    this._tooltip.show();
+  }
+
   _setCursor(type) {
     if (this._root?.cursor_type !== type)
       this._root.cursor_type = type;
@@ -958,6 +988,7 @@ export class NativeOverlay {
 
   _onPress(event) {
     const point = this._pointer(event);
+    this._tooltip?.hide();
     const entry = this._textEntry?.entry;
     if (entry) {
       const [ex, ey] = entry.get_transformed_position();
@@ -1060,20 +1091,6 @@ export class NativeOverlay {
       this._createTextEntry(point);
       return Clutter.EVENT_STOP;
     }
-    if (this._tool === Tool.MAGNIFIER) {
-      this._addAnnotation({
-        kind: Tool.MAGNIFIER,
-        x: point.x,
-        y: point.y,
-        radius: 48,
-        zoom: 2,
-        color: this._style.color,
-        width: this._style.width,
-      });
-      this._repaint();
-      return Clutter.EVENT_STOP;
-    }
-
     this._draft = createAnnotation(this._tool, point, this._style);
     this._drag = { mode: 'annotation' };
     this._repaint();
@@ -1290,14 +1307,12 @@ export class NativeOverlay {
     this._undo = [];
     this._redo = [];
     this._draft = null;
-    this._syncUndo();
   }
 
   _addAnnotation(annotation) {
     this._annotations.push(annotation);
     this._undo.push(annotation);
     this._redo = [];
-    this._syncUndo();
   }
 
   _undoAction() {
@@ -1313,7 +1328,6 @@ export class NativeOverlay {
     if (index >= 0)
       this._annotations.splice(index, 1);
     this._redo.push(annotation);
-    this._syncUndo();
     this._repaint();
   }
 
@@ -1323,13 +1337,7 @@ export class NativeOverlay {
       return;
     this._annotations.push(annotation);
     this._undo.push(annotation);
-    this._syncUndo();
     this._repaint();
-  }
-
-  _syncUndo() {
-    this._toolbar.setUndo(this._undo.length > 0);
-    this._toolbar.setRedo(this._redo.length > 0);
   }
 
   _createTextEntry(point) {
@@ -1503,6 +1511,7 @@ export class NativeOverlay {
       return;
     this._closed = true;
     this._closePopup();
+    this._tooltip = null;
     this._cancelText();
     if (this._grab) {
       Main.popModal(this._grab);

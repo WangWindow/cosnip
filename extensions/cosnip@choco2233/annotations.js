@@ -14,7 +14,6 @@ export const Tool = {
   MOSAIC: 'mosaic',
   BLUR: 'blur',
   TEXT: 'text',
-  MAGNIFIER: 'magnifier',
   ERASER: 'eraser',
 };
 
@@ -38,8 +37,6 @@ export function createAnnotation(tool, point, style) {
       return { ...base, points: [point] };
     case Tool.TEXT:
       return { ...base, x: point.x, y: point.y, text: '', size: style.fontSize };
-    case Tool.MAGNIFIER:
-      return { ...base, x: point.x, y: point.y, radius: 48, zoom: 2 };
     default:
       return null;
   }
@@ -107,8 +104,6 @@ export function annotationIsValid(annotation) {
       return annotation.points.length >= 2;
     case Tool.TEXT:
       return annotation.text.trim().length > 0;
-    case Tool.MAGNIFIER:
-      return true;
     default:
       return false;
   }
@@ -205,9 +200,6 @@ function drawVector(cr, annotation, options) {
     case Tool.BLUR:
       drawMosaic(cr, annotation, options, true);
       break;
-    case Tool.MAGNIFIER:
-      drawMagnifier(cr, annotation, options);
-      break;
     case Tool.ERASER:
       drawEraser(cr, annotation, options);
       break;
@@ -282,43 +274,6 @@ function drawEraser(cr, annotation, options) {
   paintPixbuf(cr, source, origin.x, origin.y,
     1 / (options.deviceScale || 1));
   cr.restore();
-}
-
-function drawMagnifier(cr, annotation, options) {
-  const source = options.sourcePixbuf;
-  if (!source)
-    return;
-  const scale = options.deviceScale || 1;
-  const origin = options.sourceOrigin ?? { x: 0, y: 0 };
-  const radius = annotation.radius || 48;
-  const zoom = Math.max(1, annotation.zoom || 2);
-  const cell = 4;
-  cr.save();
-  cr.arc(annotation.x, annotation.y, radius, 0, Math.PI * 2);
-  cr.clip();
-  for (let dy = -radius; dy < radius; dy += cell) {
-    for (let dx = -radius; dx < radius; dx += cell) {
-      if (dx * dx + dy * dy > radius * radius)
-        continue;
-      const sx = Math.round(
-        (annotation.x + dx / zoom - origin.x) * scale);
-      const sy = Math.round(
-        (annotation.y + dy / zoom - origin.y) * scale);
-      const pixel = pixbufPixel(source, sx, sy);
-      cr.setSourceRGBA(
-        pixel[0] / 255, pixel[1] / 255, pixel[2] / 255, 1);
-      cr.rectangle(
-        annotation.x + dx, annotation.y + dy,
-        Math.min(cell, radius - dx),
-        Math.min(cell, radius - dy));
-      cr.fill();
-    }
-  }
-  cr.restore();
-  setColor(cr, annotation.color);
-  cr.setLineWidth(Math.max(1, annotation.width));
-  cr.arc(annotation.x, annotation.y, radius, 0, Math.PI * 2);
-  cr.stroke();
 }
 
 function drawText(cr, annotation) {

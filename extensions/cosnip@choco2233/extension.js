@@ -97,6 +97,12 @@ const INTERFACE_XML = `
     <method name="Pins">
       <arg type="s" direction="out" name="state"/>
     </method>
+    <method name="TestDrag">
+      <arg type="i" direction="in" name="x1"/>
+      <arg type="i" direction="in" name="y1"/>
+      <arg type="i" direction="in" name="x2"/>
+      <arg type="i" direction="in" name="y2"/>
+    </method>
     <method name="Pointer">
       <arg type="i" direction="out" name="x"/>
       <arg type="i" direction="out" name="y"/>
@@ -150,7 +156,7 @@ class NativeService {
   }
 
   Ping() {
-    return 'cosnip-native/2';
+    return 'cosnip-native/4';
   }
 
   Count() {
@@ -215,6 +221,10 @@ class NativeService {
 
   Pins() {
     return JSON.stringify(this._extension.pinsState);
+  }
+
+  async TestDrag(x1, y1, x2, y2) {
+    await this._extension.testDrag(x1, y1, x2, y2);
   }
 
   Pointer() {
@@ -373,6 +383,38 @@ export default class CosnipExtension extends Extension {
       device.notify_button(time, button, Clutter.ButtonState.RELEASED);
     } catch (error) {
       logError(error, 'cosnip: warp click failed');
+    }
+  }
+
+  async testDrag(x1, y1, x2, y2) {
+    try {
+      const [seat, device] = this._virtualPointerDevice();
+      seat.warp_pointer(x1, y1);
+      let time = Clutter.get_current_event_time() || 0;
+      device.notify_absolute_motion(time, x1, y1);
+      await new Promise(resolve => GLib.timeout_add(
+        GLib.PRIORITY_DEFAULT, 80, () => {
+          resolve();
+          return GLib.SOURCE_REMOVE;
+        }));
+      time = Clutter.get_current_event_time() || 0;
+      device.notify_button(time, 1, Clutter.ButtonState.PRESSED);
+      const steps = 8;
+      for (let i = 1; i <= steps; i++) {
+        const x = x1 + (x2 - x1) * i / steps;
+        const y = y1 + (y2 - y1) * i / steps;
+        time = Clutter.get_current_event_time() || 0;
+        device.notify_absolute_motion(time, x, y);
+        await new Promise(resolve => GLib.timeout_add(
+          GLib.PRIORITY_DEFAULT, 40, () => {
+            resolve();
+            return GLib.SOURCE_REMOVE;
+          }));
+      }
+      time = Clutter.get_current_event_time() || 0;
+      device.notify_button(time, 1, Clutter.ButtonState.RELEASED);
+    } catch (error) {
+      logError(error, 'cosnip: test drag failed');
     }
   }
 

@@ -1,4 +1,5 @@
 import Clutter from 'gi://Clutter';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 import cairo from 'cairo';
 
@@ -17,7 +18,11 @@ export class PinManager {
     this._pins = new Map();
     this._nextId = 1;
     this._stageScrollId = global.stage.connect(
-      'scroll-event', (_actor, event) => this._onStageScroll(event));
+      'captured-event', (_actor, event) => {
+        if (event.type() !== Clutter.EventType.SCROLL)
+          return Clutter.EVENT_PROPAGATE;
+        return this._onStageScroll(event);
+      });
   }
 
   get count() {
@@ -80,9 +85,31 @@ export class PinManager {
       pixelWidth: pixbuf.get_width(),
       pixelHeight: pixbuf.get_height(),
     };
+    let drag = null;
     actor.connect('button-press-event', (_actor, event) => {
       if (event.get_button() === 3) {
         this.remove(id);
+        return Clutter.EVENT_STOP;
+      }
+      if (event.get_button() === 1) {
+        const [x, y] = event.get_coords();
+        drag = { x, y, actorX: actor.x, actorY: actor.y };
+        return Clutter.EVENT_STOP;
+      }
+      return Clutter.EVENT_PROPAGATE;
+    });
+    actor.connect('motion-event', (_actor, event) => {
+      if (!drag)
+        return Clutter.EVENT_PROPAGATE;
+      const [x, y] = event.get_coords();
+      actor.set_position(
+        drag.actorX + x - drag.x,
+        drag.actorY + y - drag.y);
+      return Clutter.EVENT_STOP;
+    });
+    actor.connect('button-release-event', (_actor, event) => {
+      if (event.get_button() === 1 && drag) {
+        drag = null;
         return Clutter.EVENT_STOP;
       }
       return Clutter.EVENT_PROPAGATE;
@@ -92,18 +119,13 @@ export class PinManager {
         return Clutter.EVENT_PROPAGATE;
       return Clutter.EVENT_STOP;
     });
-    const pan = new Clutter.PanGesture();
-    pan.begin_threshold = 3;
-    pan.connect('pan-update', gesture => {
-      const delta = gesture.get_delta();
-      actor.set_position(
-        actor.x + delta.get_x(),
-        actor.y + delta.get_y());
-    });
-    actor.add_action(pan);
 
     this._pins.set(id, pin);
-    Main.layoutManager.addChrome(actor);
+    Main.layoutManager.addTopChrome(actor);
+    const uiGroup = Main.layoutManager.uiGroup;
+    const overlayGroup = Main.layoutManager.screenshotUIGroup;
+    if (overlayGroup && uiGroup.contains(overlayGroup))
+      uiGroup.set_child_below_sibling(actor, overlayGroup);
     actor.visible = !Main.overview.visible;
     return id;
   }
@@ -126,7 +148,8 @@ export class PinManager {
   }
 
   _onStageScroll(event) {
-    if (this._pins.size === 0)
+    if (this._pins.size === 0 ||
+        Main.actionMode !== Shell.ActionMode.NORMAL)
       return Clutter.EVENT_PROPAGATE;
     const [x, y] = global.get_pointer();
     const pin = this._pinAt(x, y);

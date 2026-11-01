@@ -14,7 +14,7 @@ of scope for the native GNOME extension.
 | Window detection | Hover highlight and click-to-select; Tab toggles |
 | Display | Fixed two-tone selection frame, handles, dim mask, tips, magnifier with grid and coordinates; optional cursor capture |
 | Snip behavior | Window auto-detection; Enter default output; double-click copy; middle-click pin; wheel changes tool width |
-| Tools | Rectangle, line, arrow, pencil, highlighter, mosaic, blur, text, magnifier, eraser, select; toolbar click only |
+| Tools | Rectangle, line, arrow, pencil, highlighter, mosaic, blur, text, eraser, select; toolbar click only |
 | Eraser | Freehand annotation-pixel erase, original screenshot preserved |
 | Mosaic/blur | Freehand brush strokes, shared preview/export mask |
 | Undo/redo | Annotation add/erase history |

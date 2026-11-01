@@ -22,9 +22,9 @@ global pointer movement, and always-on-top pin actors.
 - F1 snip, F3 paste clipboard image as a pin (configurable)
 - Selection with eight resize handles and a pixel-size badge
 - Window detection with hover highlight and click-to-select (Tab toggles)
-- Pixel magnifier with fixed grid and coordinate readout
+- Cursor pixel magnifier with fixed grid and coordinate readout
 - Toolbar: rectangle, line, arrow, pencil, highlighter, mosaic/blur, text,
-  magnifier, eraser, cursor toggle, undo/redo, cancel, pin, save, copy
+  eraser, cursor toggle, cancel, pin, save, copy
 - Native symbolic icons and St widgets; Adwaita/GTK4 preferences
 - Native pins with border texture, opacity, drag, wheel zoom, and right-click close
 - Toolbar-only tool switching (no keyboard tool bindings)
